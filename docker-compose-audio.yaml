@@ -1,0 +1,66 @@
+# docker-compose-audio.yaml
+#
+# Audio infrastructure overlay for DeviceHub
+# Usage: docker compose -f docker-compose-prod.yaml -f docker-compose-audio.yaml --env-file scripts/variables.env up -d
+
+services:
+    pulse-hub:
+        build:
+            context: ./audio-infra/pulse-hub
+        container_name: pulse-hub
+        environment:
+            - MAX_EMU_SINKS=20
+        volumes:
+            - pulse-sock:/run/pulse
+        restart: unless-stopped
+        networks:
+            devicehub:
+        healthcheck:
+            test: pactl --server=unix:/run/pulse/shared.sock info >/dev/null 2>&1
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
+
+    audio-capture-mgr:
+        build:
+            context: ./audio-infra/audio-capture-manager
+        container_name: audio-capture-mgr
+        environment:
+            - MANAGER_PORT=7600
+            - PA_SERVER=unix:/run/pulse/shared.sock
+            - OPUS_BITRATE=64000
+        volumes:
+            - pulse-sock:/run/pulse:ro
+        ports:
+            - "7600:7600"
+        depends_on:
+            pulse-hub:
+                condition: service_healthy
+        restart: unless-stopped
+        networks:
+            devicehub:
+
+    emulator-1:
+        image: budtmo/docker-android:emulator_13.0
+        container_name: emulator-1
+        privileged: true
+        environment:
+            - EMULATOR_DEVICE=pixel_6
+            - WEB_VNC=true
+            - PULSE_SERVER=unix:/run/pulse/shared.sock
+            - PULSE_SINK=emu_audio_1
+        volumes:
+            - pulse-sock:/run/pulse
+        ports:
+            - "6080:6080"
+            - "5555:5555"
+        depends_on:
+            pulse-hub:
+                condition: service_healthy
+        restart: unless-stopped
+        networks:
+            devicehub:
+
+volumes:
+    pulse-sock:

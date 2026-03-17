@@ -1,0 +1,9 @@
+{
+  "name": "audio-capture-manager",
+  "version": "0.1.0",
+  "description": "Manages FFmpeg audio capture processes for DeviceHub emulators",
+  "main": "manager.js",
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

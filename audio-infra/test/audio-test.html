@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeviceHub Audio Test v2</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0f0f12;
+    color: #e0ddd5;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .player {
+    width: 420px;
+    background: #1a1a22;
+    border: 1px solid #2a2a35;
+    border-radius: 16px;
+    padding: 32px;
+  }
+  .title { font-size: 14px; font-weight: 500; letter-spacing: 0.5px; color: #8886a0; text-transform: uppercase; margin-bottom: 8px; }
+  .device-name { font-size: 22px; font-weight: 600; margin-bottom: 24px; color: #e8e6e0; }
+  .url-input {
+    width: 100%;
+    background: #12121a;
+    border: 1px solid #2a2a38;
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #c0bdb5;
+    font-size: 13px;
+    font-family: monospace;
+    margin-bottom: 16px;
+    outline: none;
+  }
+  .url-input:focus { border-color: #5b57d6; }
+  .viz {
+    height: 64px;
+    background: #12121a;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    overflow: hidden;
+    position: relative;
+  }
+  .viz canvas { width: 100%; height: 100%; }
+  .viz .no-signal {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: #4a4860; letter-spacing: 1px;
+  }
+  .controls { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+  .play-btn {
+    width: 48px; height: 48px; border-radius: 50%;
+    border: 2px solid #5b57d6; background: transparent;
+    color: #8884e0; font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s; flex-shrink: 0;
+  }
+  .play-btn:hover { background: #5b57d620; }
+  .play-btn.active { background: #5b57d6; color: #fff; border-color: #5b57d6; }
+  .volume-wrap { flex: 1; display: flex; align-items: center; gap: 10px; }
+  .vol-icon { font-size: 16px; color: #6a6880; }
+  input[type="range"] {
+    flex: 1; -webkit-appearance: none; height: 4px;
+    background: #2a2a38; border-radius: 2px; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px;
+    border-radius: 50%; background: #7a76d6; cursor: pointer;
+  }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+  .stat { background: #12121a; border-radius: 8px; padding: 10px 12px; }
+  .stat-label { font-size: 10px; color: #5a5870; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .stat-value { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .stat-value.ok { color: #5dd6a0; }
+  .stat-value.warn { color: #d6a85d; }
+  .stat-value.err { color: #d65d5d; }
+  .stat-value.off { color: #4a4860; }
+  .log {
+    background: #12121a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #6a6880;
+    max-height: 100px;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+  .log .ok { color: #5dd6a0; }
+  .log .err { color: #d65d5d; }
+  .log .warn { color: #d6a85d; }
+</style>
+</head>
+<body>
+<div class="player">
+  <div class="title">DeviceHub Audio</div>
+  <div class="device-name" id="deviceName">emulator-1</div>
+
+  <input class="url-input" id="wsUrl"
+    value="ws://localhost:7600/audio/emulator-1:5555"
+    placeholder="ws://host:port/audio/serial">
+
+  <div class="viz" id="viz">
+    <canvas id="vizCanvas"></canvas>
+    <div class="no-signal" id="noSignal">NO SIGNAL</div>
+  </div>
+
+  <div class="controls">
+    <button class="play-btn" id="playBtn" onclick="togglePlay()">&#9654;</button>
+    <div class="volume-wrap">
+      <span class="vol-icon">&#128264;</span>
+      <input type="range" id="volume" min="0" max="100" value="80" oninput="setVolume(this.value)">
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Status</div>
+      <div class="stat-value off" id="statStatus">Disconnected</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Packets</div>
+      <div class="stat-value off" id="statPackets">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Data received</div>
+      <div class="stat-value off" id="statBytes">0 KB</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Playback</div>
+      <div class="stat-value off" id="statBuffer">-</div>
+    </div>
+  </div>
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+/**
+ * Audio playback via MediaSource Extensions (MSE)
+ *
+ * FFmpeg outputs WebM/Opus (matroska container with Opus codec).
+ * Chrome natively supports appending WebM chunks to a MediaSource SourceBuffer.
+ * This gives us true streaming playback without accumulating blobs.
+ */
+
+let ws = null;
+let playing = false;
+let packetCount = 0;
+let totalBytes = 0;
+let mediaSource = null;
+let sourceBuffer = null;
+let audioElement = null;
+let queue = [];
+let appending = false;
+
+const canvas = document.getElementById('vizCanvas');
+const ctx = canvas.getContext('2d');
+let vizData = new Array(64).fill(0);
+
+function log(msg, cls) {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  // Keep last 20 lines
+  while (el.children.length > 20) el.removeChild(el.firstChild);
+}
+
+function togglePlay() {
+  playing ? stop() : start();
+}
+
+function start() {
+  const url = document.getElementById('wsUrl').value.trim();
+  if (!url) return;
+
+  document.getElementById('log').innerHTML = '';
+  setStatus('Connecting...', 'warn');
+  log('Connecting to ' + url);
+
+  // Check MSE support
+  const mimeType = 'audio/webm; codecs=opus';
+  if (!MediaSource.isTypeSupported(mimeType)) {
+    log('ERROR: Browser does not support ' + mimeType, 'err');
+    setStatus('Unsupported', 'err');
+    return;
+  }
+  log('MSE supports: ' + mimeType, 'ok');
+
+  // Create audio element + MediaSource
+  audioElement = document.createElement('audio');
+  audioElement.volume = document.getElementById('volume').value / 100;
+
+  mediaSource = new MediaSource();
+  audioElement.src = URL.createObjectURL(mediaSource);
+
+  mediaSource.addEventListener('sourceopen', () => {
+    log('MediaSource opened', 'ok');
+    try {
+      sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+      sourceBuffer.mode = 'sequence';
+      log('SourceBuffer created (sequence mode)', 'ok');
+
+      sourceBuffer.addEventListener('updateend', () => {
+        appending = false;
+        drainQueue();
+        // Auto-play and keep near live edge
+        if (audioElement.paused && sourceBuffer.buffered.length > 0) {
+          audioElement.play().then(() => {
+            log('Playback started', 'ok');
+            setPlayback('playing', 'ok');
+          }).catch(e => {
+            log('Autoplay blocked: click play again. ' + e.message, 'warn');
+            setPlayback('click play', 'warn');
+          });
+        }
+        // Stay near live edge — if we fall behind, seek forward
+        if (sourceBuffer.buffered.length > 0) {
+          const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+          const lag = end - audioElement.currentTime;
+          if (lag > 3) {
+            audioElement.currentTime = end - 0.5;
+            log('Seeking to live edge (lag=' + lag.toFixed(1) + 's)', 'warn');
+          }
+        }
+      });
+
+      sourceBuffer.addEventListener('error', (e) => {
+        log('SourceBuffer error: ' + e, 'err');
+      });
+
+      // Now connect WebSocket
+      connectWS(url);
+
+    } catch (e) {
+      log('SourceBuffer creation failed: ' + e.message, 'err');
+      setStatus('Error', 'err');
+    }
+  });
+
+  mediaSource.addEventListener('sourceended', () => log('MediaSource ended'));
+  mediaSource.addEventListener('sourceclose', () => log('MediaSource closed'));
+}
+
+function connectWS(url) {
+  ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    playing = true;
+    packetCount = 0;
+    totalBytes = 0;
+    queue = [];
+
+    document.getElementById('playBtn').classList.add('active');
+    document.getElementById('playBtn').innerHTML = '&#9646;&#9646;';
+    document.getElementById('noSignal').style.display = 'none';
+    setStatus('Connected', 'ok');
+    log('WebSocket connected', 'ok');
+  };
+
+  ws.onmessage = (event) => {
+    packetCount++;
+    totalBytes += event.data.byteLength;
+
+    document.getElementById('statPackets').textContent = packetCount;
+    document.getElementById('statPackets').className = 'stat-value ok';
+    document.getElementById('statBytes').textContent = formatBytes(totalBytes);
+    document.getElementById('statBytes').className = 'stat-value ok';
+
+    updateViz(new Uint8Array(event.data));
+
+    // Queue data for SourceBuffer
+    queue.push(new Uint8Array(event.data));
+    drainQueue();
+  };
+
+  ws.onerror = () => {
+    log('WebSocket error', 'err');
+    setStatus('Error', 'err');
+  };
+
+  ws.onclose = (event) => {
+    log('WebSocket closed: ' + event.code, event.code === 1000 ? 'ok' : 'err');
+    if (playing) {
+      setStatus('Disconnected', 'err');
+    }
+  };
+}
+
+function drainQueue() {
+  if (appending || queue.length === 0 || !sourceBuffer) return;
+  if (mediaSource.readyState !== 'open') return;
+  if (sourceBuffer.updating) return;
+
+  appending = true;
+  const chunk = queue.shift();
+  try {
+    sourceBuffer.appendBuffer(chunk);
+  } catch (e) {
+    appending = false;
+    // QuotaExceededError — remove old data
+    if (e.name === 'QuotaExceededError') {
+      log('Buffer full, removing old data', 'warn');
+      try {
+        const start = sourceBuffer.buffered.start(0);
+        const end = sourceBuffer.buffered.end(0) - 5;
+        if (end > start) sourceBuffer.remove(start, end);
+      } catch (re) {}
+    } else {
+      log('Append error: ' + e.message, 'err');
+    }
+  }
+}
+
+function stop() {
+  playing = false;
+  if (ws) { ws.close(); ws = null; }
+  if (mediaSource && mediaSource.readyState === 'open') {
+    try { mediaSource.endOfStream(); } catch(e) {}
+  }
+  if (audioElement) { audioElement.pause(); audioElement.src = ''; audioElement = null; }
+  mediaSource = null;
+  sourceBuffer = null;
+  queue = [];
+  appending = false;
+
+  document.getElementById('playBtn').classList.remove('active');
+  document.getElementById('playBtn').innerHTML = '&#9654;';
+  document.getElementById('noSignal').style.display = 'flex';
+  setStatus('Disconnected', 'off');
+  setPlayback('-', 'off');
+}
+
+function setVolume(val) {
+  if (audioElement) audioElement.volume = val / 100;
+}
+
+function setStatus(text, cls) {
+  const el = document.getElementById('statStatus');
+  el.textContent = text; el.className = `stat-value ${cls}`;
+}
+
+function setPlayback(text, cls) {
+  const el = document.getElementById('statBuffer');
+  el.textContent = text; el.className = `stat-value ${cls}`;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function updateViz(data) {
+  vizData.shift();
+  let sum = 0;
+  for (let i = 0; i < Math.min(data.length, 200); i++) sum += Math.abs(data[i] - 128);
+  vizData.push(sum / Math.min(data.length, 200));
+  drawViz();
+}
+
+function drawViz() {
+  const w = canvas.width = canvas.offsetWidth * 2;
+  const h = canvas.height = canvas.offsetHeight * 2;
+  ctx.clearRect(0, 0, w, h);
+  const barW = w / vizData.length;
+  for (let i = 0; i < vizData.length; i++) {
+    const amp = Math.min(vizData[i] / 80, 1);
+    const barH = amp * h * 0.8;
+    ctx.fillStyle = `rgba(91, 87, 214, ${0.3 + amp * 0.7})`;
+    ctx.fillRect(i * barW + 1, (h - barH) / 2, barW - 2, barH);
+  }
+}
+
+drawViz();
+
+document.getElementById('wsUrl').addEventListener('input', function() {
+  const match = this.value.match(/\/audio\/(.+)$/);
+  if (match) document.getElementById('deviceName').textContent = decodeURIComponent(match[1]);
+});
+</script>
+</body>
+</html>
