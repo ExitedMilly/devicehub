@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const { URL } = require('url');
@@ -11,10 +11,271 @@ const CHANNELS = 1;
 const FRAME_DURATION_MS = 20;
 const MAX_RESPAWN_DELAY_MS = 30000;
 
+// Auto-discovery config
+const PA_POLL_INTERVAL_MS = parseInt(process.env.PA_POLL_INTERVAL || '3000');
+const AUTO_DISCOVER = process.env.AUTO_DISCOVER !== 'false'; // enabled by default
+
+// Emulator config: maps container hostname patterns to sink indexes and serials
+// Format: EMULATOR_MAP=container_prefix:sink_index:serial,...
+// Example: EMULATOR_MAP=emulator-1:1:emulator-1:5555,emulator-2:2:emulator-2:5555
+// If not set, auto-assigns based on order of appearance
+const EMULATOR_MAP_RAW = process.env.EMULATOR_MAP || '';
+
 // WebM element IDs
 const CLUSTER_ID = 0x1f43b675;
 
 const instances = new Map();
+
+// ===================== Emulator Registry =====================
+// Maps container hostnames to sink indexes and serials
+
+class EmulatorRegistry {
+    constructor() {
+        // hostname → { sinkIndex, serial }
+        this.map = new Map();
+        this.nextAutoIndex = 1;
+        this._parseEnvMap();
+    }
+
+    _parseEnvMap() {
+        if (!EMULATOR_MAP_RAW) return;
+        // Format: hostname_prefix:sink_index:serial,...
+        for (const entry of EMULATOR_MAP_RAW.split(',')) {
+            const parts = entry.trim().split(':');
+            if (parts.length >= 3) {
+                const hostname = parts[0];
+                const sinkIndex = parseInt(parts[1]);
+                const serial = parts.slice(2).join(':'); // serial may contain ':'
+                this.map.set(hostname, { sinkIndex, serial });
+                console.log('[registry] Static mapping: ' + hostname + ' → sink ' + sinkIndex + ', serial ' + serial);
+                if (sinkIndex >= this.nextAutoIndex) {
+                    this.nextAutoIndex = sinkIndex + 1;
+                }
+            }
+        }
+    }
+
+    resolve(hostname) {
+        // Exact match
+        if (this.map.has(hostname)) {
+            return this.map.get(hostname);
+        }
+        // Prefix match (hostname might be full container ID, map has short name)
+        for (const [prefix, info] of this.map) {
+            if (hostname.startsWith(prefix)) {
+                return info;
+            }
+        }
+        // Auto-assign
+        const sinkIndex = this.nextAutoIndex++;
+        const serial = hostname + ':5555'; // best guess
+        const info = { sinkIndex, serial };
+        this.map.set(hostname, info);
+        console.log('[registry] Auto-assigned: ' + hostname + ' → sink ' + sinkIndex + ', serial ' + serial);
+        return info;
+    }
+}
+
+const registry = new EmulatorRegistry();
+
+// ===================== PA Monitor =====================
+// Polls PulseAudio for QEMU sink-inputs, auto-routes and auto-starts capture
+
+class PAMonitor {
+    constructor() {
+        this.knownSinkInputs = new Map(); // sink-input-id → { hostname, sinkIndex, serial }
+        this.timer = null;
+        this.dtsErrorCounts = new Map(); // serial → count
+    }
+
+    start() {
+        if (!AUTO_DISCOVER) {
+            console.log('[pa-monitor] Auto-discovery disabled');
+            return;
+        }
+        console.log('[pa-monitor] Starting auto-discovery (poll every ' + PA_POLL_INTERVAL_MS + 'ms)');
+        this.timer = setInterval(() => this.poll(), PA_POLL_INTERVAL_MS);
+        // First poll immediately
+        setTimeout(() => this.poll(), 1000);
+    }
+
+    stop() {
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
+    }
+
+    poll() {
+        try {
+            const output = execSync(
+                'pactl --server="' + PA_SERVER + '" list sink-inputs 2>/dev/null',
+                { encoding: 'utf8', timeout: 5000 }
+            );
+            this.processSinkInputs(output);
+        } catch (err) {
+            // PA not available — that's ok, will retry
+        }
+    }
+
+    processSinkInputs(output) {
+        const currentInputs = this.parseSinkInputs(output);
+        const currentIds = new Set(currentInputs.map(i => i.id));
+
+        // Detect new QEMU sink-inputs
+        for (const input of currentInputs) {
+            if (input.appBinary !== 'qemu-system-x86_64') continue;
+
+            if (!this.knownSinkInputs.has(input.id)) {
+                this.onNewQemu(input);
+            } else {
+                // Capture may have been stopped — restart if needed
+                const info = this.knownSinkInputs.get(input.id);
+                const inst = instances.get(info.serial);
+                if (!inst || inst.state !== "running") {
+                    console.log("[pa-monitor] Capture not running for known input #" + input.id + ", restarting");
+                    this.knownSinkInputs.delete(input.id);
+                    this.onNewQemu(input);
+                }
+            }
+        }
+
+        // Detect removed sink-inputs
+        for (const [id, info] of this.knownSinkInputs) {
+            if (!currentIds.has(id)) {
+                this.onRemovedQemu(id, info);
+            }
+        }
+    }
+
+    onNewQemu(input) {
+        const hostname = input.hostname || 'unknown';
+        const info = registry.resolve(hostname);
+        const targetSink = 'emu_audio_' + info.sinkIndex;
+
+        console.log('[pa-monitor] New QEMU detected: sink-input #' + input.id +
+            ' from ' + hostname + ' → routing to ' + targetSink +
+            ', serial=' + info.serial);
+
+        this.knownSinkInputs.set(input.id, {
+            hostname: hostname,
+            sinkIndex: info.sinkIndex,
+            serial: info.serial
+        });
+
+        // 1. Route sink-input to correct null-sink
+        if (input.sinkName !== targetSink) {
+            try {
+                execSync(
+                    'pactl --server="' + PA_SERVER + '" move-sink-input ' + input.id + ' ' + targetSink,
+                    { timeout: 3000 }
+                );
+                console.log('[pa-monitor] Routed sink-input #' + input.id + ' to ' + targetSink);
+            } catch (err) {
+                console.error('[pa-monitor] Failed to route sink-input #' + input.id + ': ' + err.message);
+            }
+        } else {
+            console.log('[pa-monitor] Sink-input #' + input.id + ' already on ' + targetSink);
+        }
+
+        // 2. Auto-start capture if not already running
+        if (!instances.has(info.serial) || instances.get(info.serial).state !== 'running') {
+            console.log('[pa-monitor] Auto-starting capture for ' + info.serial);
+            const instance = new CaptureInstance(info.serial, info.sinkIndex);
+            instances.set(info.serial, instance);
+            instance.start();
+        }
+    }
+
+    onRemovedQemu(id, info) {
+        console.log('[pa-monitor] QEMU disconnected: sink-input #' + id +
+            ' (serial=' + info.serial + ')');
+        this.knownSinkInputs.delete(id);
+
+        // Check if any other sink-inputs exist for this serial
+        let hasOther = false;
+        for (const [, other] of this.knownSinkInputs) {
+            if (other.serial === info.serial) {
+                hasOther = true;
+                break;
+            }
+        }
+
+        if (!hasOther) {
+            // No more QEMU inputs for this emulator — stop capture
+            const instance = instances.get(info.serial);
+            if (instance) {
+                console.log('[pa-monitor] Auto-stopping capture for ' + info.serial);
+                instance.stop();
+                instances.delete(info.serial);
+            }
+        }
+    }
+
+    // Track DTS errors for auto-restart
+    trackDtsError(serial) {
+        const count = (this.dtsErrorCounts.get(serial) || 0) + 1;
+        this.dtsErrorCounts.set(serial, count);
+
+        // After 50 DTS errors, restart FFmpeg
+        if (count >= 50) {
+            this.dtsErrorCounts.set(serial, 0);
+            const instance = instances.get(serial);
+            if (instance && instance.state === 'running') {
+                console.log('[pa-monitor] Too many DTS errors for ' + serial + ', restarting capture');
+                instance.stop();
+                setTimeout(() => {
+                    if (instances.has(serial)) {
+                        instances.get(serial).start();
+                    } else {
+                        const info = this.knownSinkInputs.values().next().value;
+                        if (info && info.serial === serial) {
+                            const inst = new CaptureInstance(serial, info.sinkIndex);
+                            instances.set(serial, inst);
+                            inst.start();
+                        }
+                    }
+                }, 1000);
+            }
+        }
+    }
+
+    parseSinkInputs(output) {
+        const inputs = [];
+        let current = null;
+
+        for (const line of output.split('\n')) {
+            const idMatch = line.match(/^Sink Input #(\d+)/);
+            if (idMatch) {
+                if (current) inputs.push(current);
+                current = { id: parseInt(idMatch[1]), sinkName: null, appBinary: null, hostname: null };
+                continue;
+            }
+            if (!current) continue;
+
+            const sinkMatch = line.match(/^\tSink:\s+(\d+)/);
+            if (sinkMatch) {
+                // We need sink name, not index — will resolve below
+                current.sinkIndex = parseInt(sinkMatch[1]);
+            }
+
+            const propMatch = line.match(/^\t\t(.+?)\s*=\s*"(.+?)"/);
+            if (propMatch) {
+                const key = propMatch[1];
+                const val = propMatch[2];
+                if (key === 'application.process.binary') current.appBinary = val;
+                if (key === 'application.process.host') current.hostname = val;
+            }
+        }
+        if (current) inputs.push(current);
+
+        return inputs;
+    }
+}
+
+const paMonitor = new PAMonitor();
+
+// ===================== CaptureInstance =====================
 
 class CaptureInstance {
     constructor(serial, sinkIndex) {
@@ -65,19 +326,14 @@ class CaptureInstance {
 
         this.ffmpeg.stdout.on('data', (chunk) => {
             if (!this.initDone) {
-                // Check if this chunk starts with a Cluster element (0x1F43B675)
                 const id = chunk.length >= 4 ? chunk.readUInt32BE(0) : 0;
                 if (id === CLUSTER_ID) {
-                    // Everything buffered before this is the WebM init segment
-                    // (EBML header + Segment + SegmentInfo + Tracks)
                     this.initSegment = Buffer.concat(this.preClusterBuffer);
                     this.initDone = true;
                     this.preClusterBuffer = null;
                     console.log('[' + this.serial + '] WebM init segment captured: ' + this.initSegment.length + ' bytes');
-                    // Broadcast this first cluster
                     this._broadcast(chunk);
                 } else {
-                    // Still receiving header data
                     this.preClusterBuffer.push(Buffer.from(chunk));
                 }
             } else {
@@ -87,7 +343,14 @@ class CaptureInstance {
 
         this.ffmpeg.stderr.on('data', (data) => {
             const msg = data.toString().trim();
-            if (msg) console.log('[' + this.serial + '] FFmpeg: ' + msg);
+            if (msg) {
+                // Detect DTS errors for auto-restart
+                if (msg.includes('Non-monotonous DTS')) {
+                    paMonitor.trackDtsError(this.serial);
+                } else {
+                    console.log('[' + this.serial + '] FFmpeg: ' + msg);
+                }
+            }
         });
 
         this.ffmpeg.on('spawn', () => {
@@ -132,7 +395,6 @@ class CaptureInstance {
         this.clients.add(ws);
         console.log('[' + this.serial + '] Client connected (total: ' + this.clients.size + ')');
 
-        // Send WebM init segment so browser MSE can initialize the decoder
         if (this.initSegment) {
             ws.send(this.initSegment);
             console.log('[' + this.serial + '] Sent init segment (' + this.initSegment.length + ' bytes) to new client');
@@ -177,14 +439,20 @@ class CaptureInstance {
     }
 }
 
-// --- HTTP + WebSocket Server ---
+// ===================== HTTP + WebSocket Server =====================
+
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
     res.setHeader('Content-Type', 'application/json');
 
     if (req.method === 'GET' && url.pathname === '/api/health') {
         res.writeHead(200);
-        res.end(JSON.stringify({ status: 'ok', instances: instances.size }));
+        res.end(JSON.stringify({
+            status: 'ok',
+            instances: instances.size,
+            autoDiscovery: AUTO_DISCOVER,
+            knownQemuInputs: paMonitor.knownSinkInputs.size
+        }));
         return;
     }
 
@@ -196,6 +464,7 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Manual start (still available, but auto-discovery handles it normally)
     if (req.method === 'POST' && url.pathname === '/api/capture/start') {
         let body = '';
         req.on('data', (c) => body += c);
@@ -207,7 +476,7 @@ const server = http.createServer((req, res) => {
                     const existing = instances.get(serial);
                     if (existing.state === 'running') {
                         res.writeHead(200);
-                        res.end(JSON.stringify({ status: 'already_running', wsUrl: 'ws://audio-capture-manager:' + MANAGER_PORT + '/audio/' + serial, ...existing.toJSON() }));
+                        res.end(JSON.stringify({ status: 'already_running', ...existing.toJSON() }));
                         return;
                     }
                     existing.stop();
@@ -216,7 +485,7 @@ const server = http.createServer((req, res) => {
                 instances.set(serial, instance);
                 instance.start();
                 res.writeHead(200);
-                res.end(JSON.stringify({ status: 'started', wsUrl: 'ws://audio-capture-manager:' + MANAGER_PORT + '/audio/' + serial, ...instance.toJSON() }));
+                res.end(JSON.stringify({ status: 'started', ...instance.toJSON() }));
             } catch (err) { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); }
         });
         return;
@@ -259,18 +528,30 @@ wss.on('connection', (ws, req) => {
     instance.addClient(ws);
 });
 
+// ===================== Startup =====================
+
 server.listen(MANAGER_PORT, '0.0.0.0', () => {
     console.log('[audio-capture-manager] Listening on port ' + MANAGER_PORT);
     console.log('[audio-capture-manager] PA_SERVER=' + PA_SERVER);
+    console.log('[audio-capture-manager] AUTO_DISCOVER=' + AUTO_DISCOVER);
+    console.log('[audio-capture-manager] PA_POLL_INTERVAL=' + PA_POLL_INTERVAL_MS + 'ms');
+    if (EMULATOR_MAP_RAW) {
+        console.log('[audio-capture-manager] EMULATOR_MAP=' + EMULATOR_MAP_RAW);
+    }
     console.log('[audio-capture-manager] HTTP API: http://0.0.0.0:' + MANAGER_PORT + '/api/');
     console.log('[audio-capture-manager] Audio WS:  ws://0.0.0.0:' + MANAGER_PORT + '/audio/{serial}');
+
+    // Start PA auto-discovery
+    paMonitor.start();
 });
 
 process.on('SIGTERM', () => {
+    paMonitor.stop();
     for (const [, inst] of instances) inst.stop();
     server.close(() => process.exit(0));
 });
 process.on('SIGINT', () => {
+    paMonitor.stop();
     for (const [, inst] of instances) inst.stop();
     server.close(() => process.exit(0));
 });

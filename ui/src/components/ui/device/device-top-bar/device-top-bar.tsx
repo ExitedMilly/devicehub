@@ -10,6 +10,7 @@ import { Icon24CancelOutline, Icon24VerticalRectangle9x16Outline, Icon28DevicesO
 import { WarningModal } from '@/components/ui/modals'
 import { ConditionalRender } from '@/components/lib/conditional-render'
 import { ScreenQualitySelector } from '@/components/ui/screen-quality-selector'
+import { AudioToggleButton } from './audio-toggle-button'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
@@ -78,6 +79,7 @@ export const DeviceTopBar = observer(() => {
         <ConditionalRender conditions={[device?.platform === 'Android']}>
           <ScreenQualitySelector />
         </ConditionalRender>
+        <AudioToggleButton />
         <Button
           appearance='neutral'
           before={<Icon24CancelOutline fill='var(--vkui--color_icon_negative)' />}

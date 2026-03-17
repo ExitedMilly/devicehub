@@ -8,6 +8,7 @@ import { ConditionalRender } from '@/components/lib/conditional-render'
 
 import { useScreenAutoQuality } from '@/lib/hooks/use-screen-auto-quality.hook'
 import { useScreenStreaming } from '@/lib/hooks/use-screen-streaming.hook'
+import { useAudioStreaming } from '@/lib/hooks/use-audio-streaming.hook'
 import { useCallbackWithErrorHandling } from '@/lib/hooks/use-callback-with-error-handling.hook'
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
@@ -29,6 +30,7 @@ export const StreamingScreen = observer(({ canvasWrapperRef }: ScreenProps) => {
 
   useScreenStreaming({ canvasRef, canvasWrapperRef })
   useScreenAutoQuality()
+  useAudioStreaming()
 
   const onMouseDown = useCallbackWithErrorHandling((event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault()

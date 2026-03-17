@@ -29,6 +29,7 @@ import type { KeyboardService } from '@/services/keyboard-service/keyboard-servi
 import type { SaveLogsService } from '@/services/save-logs-service/save-logs-service'
 import type { GroupItemService } from '@/services/group-item-service/group-item-service'
 import type { DeviceScreenStore } from '@/store/device-screen-store/device-screen-store'
+import type { DeviceAudioStore } from '@/store/device-audio-store'
 import type { LogsTrackerService } from '@/services/logs-tracker-service/logs-tracker-service'
 import type { PortForwardingService } from '@/services/port-forwarding-service/port-forwarding-service'
 import type { ApplicationInstallationService } from '@/services/application-installation/application-installation-service'
@@ -57,6 +58,7 @@ export const CONTAINER_IDS = {
   factoryMobxQuery: Symbol.for('Factory<MobxQuery>') as interfaces.ServiceIdentifier<MobxQueryFactory>,
   shellControlStore: Symbol.for('ShellControlStore') as interfaces.ServiceIdentifier<ShellControlStore>,
   deviceScreenStore: Symbol.for('DeviceScreenStore') as interfaces.ServiceIdentifier<DeviceScreenStore>,
+  deviceAudioStore: Symbol.for('DeviceAudioStore') as interfaces.ServiceIdentifier<DeviceAudioStore>,
   accessTokenService: Symbol.for('AccessTokenService') as interfaces.ServiceIdentifier<AccessTokenService>,
   deviceControlStore: Symbol.for('DeviceControlStore') as interfaces.ServiceIdentifier<DeviceControlStore>,
   logsTrackerService: Symbol.for('LogsTrackerService') as interfaces.ServiceIdentifier<LogsTrackerService>,

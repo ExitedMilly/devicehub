@@ -2,6 +2,11 @@
 #
 # Audio infrastructure overlay for DeviceHub
 # Usage: docker compose -f docker-compose-prod.yaml -f docker-compose-audio.yaml --env-file scripts/variables.env up -d
+#
+# Audio flow (fully automatic):
+#   Emulator starts → QEMU connects to PulseAudio → PA monitor detects sink-input
+#   → auto-routes to correct null-sink → auto-starts FFmpeg capture
+#   → Opus/WebM streams via WebSocket → Browser plays via MSE
 
 services:
     pulse-hub:
@@ -30,6 +35,9 @@ services:
             - MANAGER_PORT=7600
             - PA_SERVER=unix:/run/pulse/shared.sock
             - OPUS_BITRATE=64000
+            # Auto-discovery enabled by default — no EMULATOR_MAP needed
+            # when containers have hostname matching their name.
+            # For custom mapping: EMULATOR_MAP=hostname:sinkIndex:serial,...
         volumes:
             - pulse-sock:/run/pulse:ro
         ports:
@@ -44,9 +52,11 @@ services:
     emulator-1:
         image: budtmo/docker-android:emulator_13.0
         container_name: emulator-1
-        privileged: true
+        hostname: emulator-1
+        devices:
+            - /dev/kvm
         environment:
-            - EMULATOR_DEVICE=pixel_6
+            - EMULATOR_DEVICE=Samsung Galaxy S10
             - WEB_VNC=true
             - PULSE_SERVER=unix:/run/pulse/shared.sock
             - PULSE_SINK=emu_audio_1
