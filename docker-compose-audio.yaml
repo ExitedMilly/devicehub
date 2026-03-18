@@ -3,10 +3,16 @@
 # Audio infrastructure overlay for DeviceHub
 # Usage: docker compose -f docker-compose-prod.yaml -f docker-compose-audio.yaml --env-file scripts/variables.env up -d
 #
-# Audio flow (fully automatic):
+# Audio OUTPUT flow (emulator → browser, fully automatic):
 #   Emulator starts → QEMU connects to PulseAudio → PA monitor detects sink-input
 #   → auto-routes to correct null-sink → auto-starts FFmpeg capture
 #   → Opus/WebM streams via WebSocket → Browser plays via MSE
+#
+# Audio INPUT flow (browser → emulator microphone):
+#   Browser getUserMedia → MediaRecorder (WebM/Opus) → WebSocket /mic/{serial}
+#   → audio-capture-mgr → FFmpeg decode (Opus → PCM s16le)
+#   → write to FIFO /run/pulse/mic_pipes/emu_mic_N
+#   → PulseAudio pipe-source → QEMU audio input → Android microphone
 
 services:
     pulse-hub:
@@ -35,11 +41,12 @@ services:
             - MANAGER_PORT=7600
             - PA_SERVER=unix:/run/pulse/shared.sock
             - OPUS_BITRATE=64000
+            - MIC_PIPE_DIR=/run/pulse/mic_pipes
             # Auto-discovery enabled by default — no EMULATOR_MAP needed
             # when containers have hostname matching their name.
             # For custom mapping: EMULATOR_MAP=hostname:sinkIndex:serial,...
         volumes:
-            - pulse-sock:/run/pulse:ro
+            - pulse-sock:/run/pulse
         ports:
             - "7600:7600"
         depends_on:
@@ -60,6 +67,7 @@ services:
             - WEB_VNC=true
             - PULSE_SERVER=unix:/run/pulse/shared.sock
             - PULSE_SINK=emu_audio_1
+            - PULSE_SOURCE=emu_mic_1
         volumes:
             - pulse-sock:/run/pulse
         ports:

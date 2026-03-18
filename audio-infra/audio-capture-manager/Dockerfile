@@ -13,6 +13,7 @@ COPY package.json /app/
 RUN npm install --production
 
 COPY manager.js /app/
+COPY emulator_controller.proto /app/
 COPY healthcheck.sh /app/
 RUN chmod +x /app/healthcheck.sh
 

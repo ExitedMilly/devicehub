@@ -14,7 +14,9 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Socket directory — will be shared via Docker volume
-RUN mkdir -p /run/pulse && chown pulse-hub:pulse-hub /run/pulse
+# mic_pipes/ holds FIFO files for virtual microphone sources
+RUN mkdir -p /run/pulse /run/pulse/mic_pipes && \
+    chown -R pulse-hub:pulse-hub /run/pulse
 
 USER pulse-hub
 

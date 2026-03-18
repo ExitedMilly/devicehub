@@ -11,6 +11,7 @@ import { WarningModal } from '@/components/ui/modals'
 import { ConditionalRender } from '@/components/lib/conditional-render'
 import { ScreenQualitySelector } from '@/components/ui/screen-quality-selector'
 import { AudioToggleButton } from './audio-toggle-button'
+import { MicToggleButton } from './mic-toggle-button'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
@@ -80,6 +81,7 @@ export const DeviceTopBar = observer(() => {
           <ScreenQualitySelector />
         </ConditionalRender>
         <AudioToggleButton />
+        <MicToggleButton />
         <Button
           appearance='neutral'
           before={<Icon24CancelOutline fill='var(--vkui--color_icon_negative)' />}

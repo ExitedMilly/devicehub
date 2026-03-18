@@ -1,15 +1,39 @@
 const { spawn, execSync } = require('child_process');
 const http = require('http');
+const path = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
 const { URL } = require('url');
+const grpc = require('@grpc/grpc-js');
+const protoLoader = require('@grpc/proto-loader');
 
 const MANAGER_PORT = parseInt(process.env.MANAGER_PORT || '7600');
 const PA_SERVER = process.env.PA_SERVER || 'unix:/run/pulse/shared.sock';
 const OPUS_BITRATE = process.env.OPUS_BITRATE || '64000';
+const MIC_PIPE_DIR = process.env.MIC_PIPE_DIR || '/run/pulse/mic_pipes';
+const GRPC_PORT = parseInt(process.env.EMULATOR_GRPC_PORT || '8554');
 const SAMPLE_RATE = 48000;
 const CHANNELS = 1;
 const FRAME_DURATION_MS = 20;
 const MAX_RESPAWN_DELAY_MS = 30000;
+
+// Load emulator gRPC proto
+const PROTO_PATH = path.join(__dirname, 'emulator_controller.proto');
+let emulatorProto = null;
+try {
+    const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
+        keepCase: true,
+        longs: String,
+        enums: String,
+        defaults: true,
+        oneofs: true
+    });
+    const proto = grpc.loadPackageDefinition(packageDefinition);
+    emulatorProto = proto.android.emulation.control;
+    console.log('[grpc] Loaded emulator_controller.proto');
+} catch (err) {
+    console.error('[grpc] Failed to load proto: ' + err.message);
+    console.error('[grpc] Microphone input via gRPC will not be available');
+}
 
 // Auto-discovery config
 const PA_POLL_INTERVAL_MS = parseInt(process.env.PA_POLL_INTERVAL || '3000');
@@ -25,6 +49,7 @@ const EMULATOR_MAP_RAW = process.env.EMULATOR_MAP || '';
 const CLUSTER_ID = 0x1f43b675;
 
 const instances = new Map();
+const micInstances = new Map(); // serial → MicrophoneInstance
 
 // ===================== Emulator Registry =====================
 // Maps container hostnames to sink indexes and serials
@@ -439,6 +464,253 @@ class CaptureInstance {
     }
 }
 
+// ===================== MicrophoneInstance =====================
+// Receives WebM/Opus from browser WS, decodes to PCM via FFmpeg,
+// sends PCM to Android emulator via gRPC injectAudio.
+
+class MicrophoneInstance {
+    constructor(serial, sinkIndex) {
+        this.serial = serial;
+        this.sinkIndex = sinkIndex;
+        this.hostname = serial.split(':')[0]; // emulator-1:5555 → emulator-1
+        this.grpcAddress = this.hostname + ':' + GRPC_PORT;
+        this.ffmpeg = null;
+        this.grpcCall = null;
+        this.state = 'idle'; // idle | running | error | stopped
+        this.client = null; // only one browser can feed mic at a time
+        this.startedAt = null;
+        this.lastError = null;
+        this.bytesReceived = 0;
+        this.pcmBytesSent = 0;
+    }
+
+    start(ws) {
+        if (this.client) {
+            ws.close(4009, 'Mic already in use for ' + this.serial);
+            return;
+        }
+
+        if (!emulatorProto) {
+            ws.close(4010, 'gRPC proto not loaded');
+            return;
+        }
+
+        this.client = ws;
+        this.state = 'running';
+        this.startedAt = new Date();
+        this.bytesReceived = 0;
+        this.pcmBytesSent = 0;
+        this.lastError = null;
+
+        console.log('[mic:' + this.serial + '] Starting mic input via gRPC → ' + this.grpcAddress);
+
+        // Create gRPC client
+        const grpcClient = new emulatorProto.EmulatorController(
+            this.grpcAddress,
+            grpc.credentials.createInsecure()
+        );
+
+        // Start injectAudio streaming call
+        this.grpcCall = grpcClient.injectAudio((err, response) => {
+            if (err) {
+                console.error('[mic:' + this.serial + '] gRPC injectAudio error: ' + err.message);
+                this.lastError = 'gRPC: ' + err.message;
+            } else {
+                console.log('[mic:' + this.serial + '] gRPC injectAudio completed');
+            }
+        });
+
+        // FFmpeg: read WebM/Opus from stdin → decode → output raw PCM s16le to stdout
+        // Low-latency flags to minimize internal buffering
+        this.ffmpeg = spawn('ffmpeg', [
+            '-hide_banner',
+            '-loglevel', 'warning',
+            '-fflags', 'nobuffer',
+            '-flags', 'low_delay',
+            '-probesize', '32',
+            '-analyzeduration', '0',
+            '-f', 'webm',
+            '-i', 'pipe:0',
+            '-f', 's16le',
+            '-ar', String(SAMPLE_RATE),
+            '-ac', String(CHANNELS),
+            'pipe:1'
+        ], {
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        this.ffmpeg.on('spawn', () => {
+            console.log('[mic:' + this.serial + '] FFmpeg started (PID ' + this.ffmpeg.pid + ')');
+        });
+
+        // PCM throttling: collect PCM into 20ms chunks and send at real-time pace
+        // 48000 Hz * 1 channel * 2 bytes (s16le) * 0.020s = 1920 bytes per chunk
+        const CHUNK_BYTES = SAMPLE_RATE * CHANNELS * 2 * FRAME_DURATION_MS / 1000;
+        const MAX_BUFFER_BYTES = CHUNK_BYTES * 5; // max 100ms buffer — drop old data beyond this
+        let pcmBuffer = Buffer.alloc(0);
+        this.pcmTimer = setInterval(() => {
+            if (pcmBuffer.length >= CHUNK_BYTES && this.grpcCall) {
+                // Drop stale data: if buffer grew beyond 100ms, skip to latest
+                if (pcmBuffer.length > MAX_BUFFER_BYTES) {
+                    const dropped = pcmBuffer.length - CHUNK_BYTES;
+                    pcmBuffer = pcmBuffer.subarray(pcmBuffer.length - CHUNK_BYTES);
+                }
+                const chunk = pcmBuffer.subarray(0, CHUNK_BYTES);
+                pcmBuffer = pcmBuffer.subarray(CHUNK_BYTES);
+                this.pcmBytesSent += chunk.length;
+                try {
+                    this.grpcCall.write({
+                        format: {
+                            samplingRate: SAMPLE_RATE,
+                            channels: 0, // Mono
+                            format: 1    // AUD_FMT_S16
+                        },
+                        timestamp: Date.now() * 1000,
+                        audio: chunk
+                    });
+                } catch (err) {
+                    console.error('[mic:' + this.serial + '] gRPC write error: ' + err.message);
+                }
+            }
+        }, FRAME_DURATION_MS);
+
+        // FFmpeg stdout → PCM buffer (capped to prevent unbounded growth)
+        this.ffmpeg.stdout.on('data', (pcmChunk) => {
+            pcmBuffer = Buffer.concat([pcmBuffer, pcmChunk]);
+            // Hard cap: never let buffer exceed 200ms to prevent memory issues
+            if (pcmBuffer.length > MAX_BUFFER_BYTES * 2) {
+                pcmBuffer = pcmBuffer.subarray(pcmBuffer.length - CHUNK_BYTES);
+            }
+        });
+
+        this.ffmpeg.stderr.on('data', (data) => {
+            const msg = data.toString().trim();
+            if (msg) {
+                console.log('[mic:' + this.serial + '] FFmpeg: ' + msg);
+            }
+        });
+
+        this.ffmpeg.on('error', (err) => {
+            this.state = 'error';
+            this.lastError = err.message;
+            console.error('[mic:' + this.serial + '] FFmpeg error: ' + err.message);
+        });
+
+        this.ffmpeg.on('exit', (code, signal) => {
+            console.log('[mic:' + this.serial + '] FFmpeg exited: code=' + code + ' signal=' + signal);
+            this.ffmpeg = null;
+            if (this.state !== 'stopped') {
+                this.state = 'idle';
+            }
+        });
+
+        // Receive WebM/Opus chunks from browser and pipe to FFmpeg stdin
+        let lastMessageTime = Date.now();
+        ws.on('message', (data) => {
+            const now = Date.now();
+            const gap = now - lastMessageTime;
+            lastMessageTime = now;
+
+            // If gap > 1 second — data is stale, restart FFmpeg+gRPC to flush buffers
+            if (gap > 1000 && this.state === 'running') {
+                console.log('[mic:' + this.serial + '] Gap detected (' + gap + 'ms), restarting pipeline');
+                this._stopPipeline();
+                this._startPipeline();
+                return;
+            }
+
+            if (this.ffmpeg && this.ffmpeg.stdin && !this.ffmpeg.stdin.destroyed) {
+                const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+                this.bytesReceived += buf.length;
+                try {
+                    this.ffmpeg.stdin.write(buf);
+                } catch (err) {
+                    console.error('[mic:' + this.serial + '] Write error: ' + err.message);
+                }
+            }
+        });
+
+        ws.on('close', () => {
+            console.log('[mic:' + this.serial + '] Browser disconnected');
+            this.stop();
+        });
+
+        ws.on('error', (err) => {
+            console.error('[mic:' + this.serial + '] WS error: ' + err.message);
+            this.stop();
+        });
+    }
+
+    _stopPipeline() {
+        if (this.pcmTimer) {
+            clearInterval(this.pcmTimer);
+            this.pcmTimer = null;
+        }
+        if (this.ffmpeg) {
+            if (this.ffmpeg.stdin && !this.ffmpeg.stdin.destroyed) {
+                this.ffmpeg.stdin.end();
+            }
+            try { this.ffmpeg.kill('SIGKILL'); } catch (e) { /* ignore */ }
+            this.ffmpeg = null;
+        }
+        if (this.grpcCall) {
+            try { this.grpcCall.end(); } catch (e) { /* ignore */ }
+            this.grpcCall = null;
+        }
+    }
+
+    stop() {
+        if (this.state === 'stopped') return;
+        console.log('[mic:' + this.serial + '] Stopping mic input (received ' +
+            this.bytesReceived + ' bytes, sent ' + this.pcmBytesSent + ' PCM bytes via gRPC)');
+        this.state = 'stopped';
+
+        this._stopPipeline();
+
+        if (this.ffmpeg) {
+            if (this.ffmpeg.stdin && !this.ffmpeg.stdin.destroyed) {
+                this.ffmpeg.stdin.end();
+            }
+            const ff = this.ffmpeg;
+            setTimeout(() => {
+                try { ff.kill('SIGTERM'); } catch (e) { /* ignore */ }
+                setTimeout(() => {
+                    try { ff.kill('SIGKILL'); } catch (e) { /* ignore */ }
+                }, 3000);
+            }, 2000);
+            this.ffmpeg = null;
+        }
+
+        if (this.grpcCall) {
+            try { this.grpcCall.end(); } catch (e) { /* ignore */ }
+            this.grpcCall = null;
+        }
+
+        if (this.client) {
+            try { this.client.close(1000, 'Mic stopped'); } catch (e) { /* ignore */ }
+            this.client = null;
+        }
+
+        // Reset to idle so the next browser can connect
+        this.state = 'idle';
+    }
+
+    toJSON() {
+        return {
+            serial: this.serial,
+            sinkIndex: this.sinkIndex,
+            grpcAddress: this.grpcAddress,
+            state: this.state,
+            hasClient: !!this.client,
+            bytesReceived: this.bytesReceived,
+            pcmBytesSent: this.pcmBytesSent,
+            startedAt: this.startedAt,
+            lastError: this.lastError,
+            ffmpegPid: this.ffmpeg ? this.ffmpeg.pid : null
+        };
+    }
+}
+
 // ===================== HTTP + WebSocket Server =====================
 
 const server = http.createServer((req, res) => {
@@ -450,6 +722,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({
             status: 'ok',
             instances: instances.size,
+            micInstances: micInstances.size,
             autoDiscovery: AUTO_DISCOVER,
             knownQemuInputs: paMonitor.knownSinkInputs.size
         }));
@@ -459,8 +732,10 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/capture/status') {
         const status = {};
         for (const [serial, inst] of instances) status[serial] = inst.toJSON();
+        const micStatus = {};
+        for (const [serial, inst] of micInstances) micStatus[serial] = inst.toJSON();
         res.writeHead(200);
-        res.end(JSON.stringify(status, null, 2));
+        res.end(JSON.stringify({ capture: status, mic: micStatus }, null, 2));
         return;
     }
 
@@ -517,15 +792,53 @@ const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws, req) => {
     const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
-    const match = url.pathname.match(/^\/audio\/(.+)$/);
-    if (!match) { ws.close(4000, 'Invalid path'); return; }
 
-    const serial = decodeURIComponent(match[1]);
-    const instance = instances.get(serial);
-    if (!instance) { ws.close(4004, 'No capture for ' + serial); return; }
-    if (instance.state !== 'running') { ws.close(4003, 'Not ready: ' + instance.state); return; }
+    // Audio output: emulator → browser
+    const audioMatch = url.pathname.match(/^\/audio\/(.+)$/);
+    if (audioMatch) {
+        const serial = decodeURIComponent(audioMatch[1]);
+        const instance = instances.get(serial);
+        if (!instance) { ws.close(4004, 'No capture for ' + serial); return; }
+        if (instance.state !== 'running') { ws.close(4003, 'Not ready: ' + instance.state); return; }
+        instance.addClient(ws);
+        return;
+    }
 
-    instance.addClient(ws);
+    // Mic input: browser → emulator
+    const micMatch = url.pathname.match(/^\/mic\/(.+)$/);
+    if (micMatch) {
+        const serial = decodeURIComponent(micMatch[1]);
+
+        // Resolve sinkIndex: check capture instances first, then use registry
+        // registry.resolve() will auto-assign if hostname is new
+        let sinkIndex = null;
+        const captureInstance = instances.get(serial);
+        if (captureInstance) {
+            sinkIndex = captureInstance.sinkIndex;
+        } else {
+            // Serial format is "hostname:port" (e.g. "emulator-1:5555")
+            const hostname = serial.split(':')[0];
+            const info = registry.resolve(hostname);
+            sinkIndex = info.sinkIndex;
+        }
+
+        // Get or create MicrophoneInstance
+        let micInst = micInstances.get(serial);
+        if (!micInst || micInst.state === 'stopped') {
+            micInst = new MicrophoneInstance(serial, sinkIndex);
+            micInstances.set(serial, micInst);
+        }
+
+        if (micInst.client) {
+            ws.close(4009, 'Mic already in use for ' + serial);
+            return;
+        }
+
+        micInst.start(ws);
+        return;
+    }
+
+    ws.close(4000, 'Invalid path');
 });
 
 // ===================== Startup =====================
@@ -540,6 +853,8 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     }
     console.log('[audio-capture-manager] HTTP API: http://0.0.0.0:' + MANAGER_PORT + '/api/');
     console.log('[audio-capture-manager] Audio WS:  ws://0.0.0.0:' + MANAGER_PORT + '/audio/{serial}');
+    console.log('[audio-capture-manager] Mic WS:    ws://0.0.0.0:' + MANAGER_PORT + '/mic/{serial}');
+    console.log('[audio-capture-manager] MIC_PIPE_DIR=' + MIC_PIPE_DIR);
 
     // Start PA auto-discovery
     paMonitor.start();
@@ -548,10 +863,12 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
 process.on('SIGTERM', () => {
     paMonitor.stop();
     for (const [, inst] of instances) inst.stop();
+    for (const [, inst] of micInstances) inst.stop();
     server.close(() => process.exit(0));
 });
 process.on('SIGINT', () => {
     paMonitor.stop();
     for (const [, inst] of instances) inst.stop();
+    for (const [, inst] of micInstances) inst.stop();
     server.close(() => process.exit(0));
 });

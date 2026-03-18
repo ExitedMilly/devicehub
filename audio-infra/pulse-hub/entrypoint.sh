@@ -6,6 +6,10 @@ rm -rf /tmp/pulse-* 2>/dev/null || true
 
 MAX_SINKS=${MAX_EMU_SINKS:-20}
 SOCKET_PATH="/run/pulse/shared.sock"
+MIC_PIPE_DIR="/run/pulse/mic_pipes"
+
+# Create mic_pipes dir at runtime (Docker volume overwrites Dockerfile-created dirs)
+mkdir -p "$MIC_PIPE_DIR"
 
 echo "[pulse-hub] Starting PulseAudio daemon..."
 echo "[pulse-hub] Max sinks: $MAX_SINKS"
@@ -64,6 +68,29 @@ done
 
 echo "[pulse-hub] All sinks created. Listing:"
 pactl --server="unix:$SOCKET_PATH" list short sinks
+
+# Create pipe-sources for virtual microphones (browser → emulator mic input)
+# Each pipe-source reads PCM from a FIFO file and exposes it as a PulseAudio source.
+# FFmpeg will decode browser WebM/Opus → PCM and write into these pipes.
+echo "[pulse-hub] Creating $MAX_SINKS pipe-sources for virtual microphones..."
+for i in $(seq 1 "$MAX_SINKS"); do
+    PIPE_PATH="${MIC_PIPE_DIR}/emu_mic_${i}"
+    # Remove stale FIFO from previous runs
+    rm -f "$PIPE_PATH"
+    pactl --server="unix:$SOCKET_PATH" \
+        load-module module-pipe-source \
+        source_name="emu_mic_${i}" \
+        file="$PIPE_PATH" \
+        format=s16le \
+        rate=48000 \
+        channels=1 \
+        source_properties=device.description="Emulator_${i}_Microphone" \
+        2>/dev/null && echo "[pulse-hub]   Created: emu_mic_${i} → $PIPE_PATH" \
+        || echo "[pulse-hub] WARN: Failed to create source emu_mic_${i}"
+done
+
+echo "[pulse-hub] Pipe-sources created. Listing sources:"
+pactl --server="unix:$SOCKET_PATH" list short sources
 
 echo "[pulse-hub] Ready. PID=$PA_PID"
 
