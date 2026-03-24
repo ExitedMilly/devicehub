@@ -5,6 +5,8 @@ import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
 
+export type EmulatorMicState = 'listening' | 'idle' | 'unknown'
+
 @injectable()
 @deviceConnectionRequired()
 export class DeviceMicStore {
@@ -12,15 +14,141 @@ export class DeviceMicStore {
   private mediaStream: MediaStream | null = null
   private mediaRecorder: MediaRecorder | null = null
   private disposed = false
+  private stateDisposed = false
+  private stateWs: WebSocket | null = null
+  private stateWsReconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private autoStopTimer: ReturnType<typeof setTimeout> | null = null
 
   isActive = false
   isConnected = false
   errorMessage: string | null = null
 
+  /** Current emulator mic state: is Android listening for microphone input? */
+  emulatorMicState: EmulatorMicState = 'unknown'
+
+  /** Whether the emulator mic state subscription is connected */
+  isStateConnected = false
+
   constructor(
     @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore
   ) {
     makeAutoObservable(this)
+  }
+
+  /** Whether the mic button should be enabled (Android is actively listening) */
+  get canActivateMic(): boolean {
+    return this.emulatorMicState === 'listening'
+  }
+
+  /** Subscribe to emulator mic state changes. Call once when device page opens. */
+  async subscribeToMicState(): Promise<void> {
+    if (this.stateWs) return
+
+    this.stateDisposed = false
+    const device = await this.deviceBySerialStore.fetch()
+
+    if (!device?.serial) return
+
+    this.connectStateWs(device.serial)
+  }
+
+  /** Unsubscribe from emulator mic state. Call when leaving device page. */
+  unsubscribeFromMicState(): void {
+    this.stateDisposed = true
+
+    if (this.autoStopTimer) {
+      clearTimeout(this.autoStopTimer)
+      this.autoStopTimer = null
+    }
+
+    if (this.stateWsReconnectTimer) {
+      clearTimeout(this.stateWsReconnectTimer)
+      this.stateWsReconnectTimer = null
+    }
+
+    if (this.stateWs) {
+      this.stateWs.onclose = null
+      this.stateWs.close()
+      this.stateWs = null
+    }
+
+    runInAction(() => {
+      this.isStateConnected = false
+      this.emulatorMicState = 'unknown'
+    })
+  }
+
+  private connectStateWs(serial: string): void {
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const url = `${wsProto}//${window.location.host}/mic-state/${serial}`
+
+    this.stateWs = new WebSocket(url)
+
+    this.stateWs.onopen = (): void => {
+      runInAction(() => {
+        this.isStateConnected = true
+      })
+
+      console.log('[DeviceMicStore] Mic state WS connected for', serial)
+    }
+
+    this.stateWs.onmessage = (event: MessageEvent): void => {
+      try {
+        const msg = JSON.parse(event.data as string)
+
+        if (msg.type === 'mic_state') {
+          const newState = msg.state as EmulatorMicState
+
+          runInAction(() => {
+            this.emulatorMicState = newState
+
+            if (newState === 'listening') {
+              // Cancel pending auto-stop — emulator is listening again
+              if (this.autoStopTimer) {
+                clearTimeout(this.autoStopTimer)
+                this.autoStopTimer = null
+              }
+            }
+
+            // Auto-stop mic when emulator stops listening (with 3s grace period)
+            if (newState === 'idle' && this.isActive) {
+              if (this.autoStopTimer) clearTimeout(this.autoStopTimer)
+
+              this.autoStopTimer = setTimeout(() => {
+                this.autoStopTimer = null
+
+                if (this.isActive && this.emulatorMicState === 'idle') {
+                  console.log('[DeviceMicStore] Emulator stopped listening, auto-stopping mic')
+                  this.stopMic()
+                }
+              }, 3000)
+            }
+          })
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    this.stateWs.onerror = (): void => {
+      console.error('[DeviceMicStore] Mic state WS error')
+    }
+
+    this.stateWs.onclose = (): void => {
+      runInAction(() => {
+        this.isStateConnected = false
+      })
+
+      // Auto-reconnect after 3 seconds
+      this.stateWsReconnectTimer = setTimeout(() => {
+        this.stateWsReconnectTimer = null
+
+        if (!this.stateDisposed) {
+          console.log('[DeviceMicStore] Reconnecting mic state WS...')
+          this.connectStateWs(serial)
+        }
+      }, 3000)
+    }
   }
 
   async startMic(): Promise<void> {

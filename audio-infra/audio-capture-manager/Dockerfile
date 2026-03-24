@@ -4,6 +4,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
         pulseaudio-utils \
+        adb \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
