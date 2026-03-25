@@ -19,6 +19,12 @@ const MAX_RESPAWN_DELAY_MS = 30000;
 // Mic state polling interval (how often we check if Android is listening)
 const MIC_STATE_POLL_MS = parseInt(process.env.MIC_STATE_POLL_MS || '1500');
 
+// Camera config
+const CAMERA_V4L2_DEVICE = process.env.CAMERA_V4L2_DEVICE || '/dev/video0';
+const CAMERA_WIDTH = parseInt(process.env.CAMERA_WIDTH || '640');
+const CAMERA_HEIGHT = parseInt(process.env.CAMERA_HEIGHT || '480');
+const CAMERA_FPS = parseInt(process.env.CAMERA_FPS || '25');
+
 // Load emulator gRPC proto
 const PROTO_PATH = path.join(__dirname, 'emulator_controller.proto');
 let emulatorProto = null;
@@ -53,6 +59,7 @@ const CLUSTER_ID = 0x1f43b675;
 
 const instances = new Map();
 const micInstances = new Map(); // serial → MicrophoneInstance
+const cameraInstances = new Map(); // serial → CameraInstance
 
 // ===================== Emulator Registry =====================
 // Maps container hostnames to sink indexes and serials
@@ -291,6 +298,149 @@ class MicStateMonitor {
 }
 
 const micStateMonitor = new MicStateMonitor();
+
+// ===================== Camera State Monitor =====================
+// Polls adb "dumpsys media.camera" for Active Camera Clients.
+// When Android app opens camera → 'active', closes → 'inactive'.
+
+const CAMERA_STATE_POLL_MS = parseInt(process.env.CAMERA_STATE_POLL_MS || '1500');
+
+class CameraStateMonitor {
+    constructor() {
+        // serial → 'active' | 'inactive' | 'unknown'
+        this.states = new Map();
+        // serial → Set<WebSocket>
+        this.subscribers = new Map();
+        this.timer = null;
+    }
+
+    start() {
+        console.log('[camera-state] Starting camera state monitor via adb (poll every ' + CAMERA_STATE_POLL_MS + 'ms)');
+        this.timer = setInterval(() => this.pollAll(), CAMERA_STATE_POLL_MS);
+        setTimeout(() => this.pollAll(), 5000);
+    }
+
+    stop() {
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
+    }
+
+    pollAll() {
+        for (const [hostname, info] of registry.map) {
+            this.pollEmulator(hostname, info.serial);
+        }
+    }
+
+    pollEmulator(hostname, serial) {
+        const adbTarget = hostname + ':5555';
+        try {
+            const output = execSync(
+                'adb -s ' + adbTarget + ' shell "dumpsys media.camera" 2>/dev/null',
+                { encoding: 'utf8', timeout: 5000 }
+            );
+            this.processCameraDump(hostname, serial, output);
+        } catch (err) {
+            // adb failed — skip this poll
+        }
+    }
+
+    processCameraDump(hostname, serial, output) {
+        // Parse "Active Camera Clients:" section
+        // When camera is active:
+        //   Active Camera Clients:
+        //   [
+        //   (Camera ID: 0, Cost: 100, PID: 10846, ...)
+        //   ]
+        // When camera is inactive:
+        //   Active Camera Clients:
+        //   [
+        //   ]
+        let inActiveClients = false;
+        let inBrackets = false;
+        let hasActiveClient = false;
+
+        for (const line of output.split('\n')) {
+            const trimmed = line.trim();
+
+            if (trimmed.startsWith('Active Camera Clients:')) {
+                inActiveClients = true;
+                continue;
+            }
+
+            if (inActiveClients) {
+                if (trimmed === '[') {
+                    inBrackets = true;
+                    continue;
+                }
+                if (trimmed === ']') {
+                    break;
+                }
+                if (inBrackets && trimmed.startsWith('(Camera ID:')) {
+                    hasActiveClient = true;
+                    break;
+                }
+                // Any other line after Active Camera Clients that's not [ or ] — end of section
+                if (!inBrackets && trimmed.length > 0) {
+                    break;
+                }
+            }
+        }
+
+        const newState = hasActiveClient ? 'active' : 'inactive';
+        const oldState = this.states.get(serial);
+        if (oldState !== newState) {
+            this.states.set(serial, newState);
+            console.log('[camera-state] ' + serial + ': ' + (oldState || 'unknown') + ' → ' + newState);
+            this._notifySubscribers(serial, newState);
+        }
+    }
+
+    subscribe(serial, ws) {
+        const hostname = serial.split(':')[0];
+        if (!this.subscribers.has(hostname)) {
+            this.subscribers.set(hostname, new Set());
+        }
+        this.subscribers.get(hostname).add(ws);
+
+        // Send current state immediately
+        const currentState = this.states.get(serial) || 'unknown';
+        this._sendState(ws, serial, currentState);
+
+        ws.on('close', () => {
+            const subs = this.subscribers.get(hostname);
+            if (subs) {
+                subs.delete(ws);
+                if (subs.size === 0) this.subscribers.delete(hostname);
+            }
+        });
+    }
+
+    _notifySubscribers(serial, state) {
+        const hostname = serial.split(':')[0];
+        const subs = this.subscribers.get(hostname);
+        if (!subs) return;
+        for (const ws of subs) {
+            this._sendState(ws, serial, state);
+        }
+    }
+
+    _sendState(ws, serial, state) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        try {
+            ws.send(JSON.stringify({
+                type: 'camera_state',
+                serial: serial,
+                state: state // 'active' | 'inactive' | 'unknown'
+            }));
+        } catch (err) {
+            // ignore
+        }
+    }
+}
+
+const cameraStateMonitor = new CameraStateMonitor();
 
 // ===================== PA Monitor =====================
 // Polls PulseAudio for QEMU sink-inputs, auto-routes and auto-starts capture
@@ -900,6 +1050,287 @@ class MicrophoneInstance {
     }
 }
 
+// ===================== CameraInstance =====================
+// Receives JPEG frames from browser WS.
+// Latest-frame-only: only the most recent frame is kept, older frames are dropped.
+// FFmpeg (image2pipe/mjpeg → v4l2loopback) with low-latency flags.
+
+const fs = require('fs');
+
+class CameraInstance {
+    constructor(serial, sinkIndex) {
+        this.serial = serial;
+        this.sinkIndex = sinkIndex;
+        this.hostname = serial.split(':')[0];
+        this.v4l2Device = CAMERA_V4L2_DEVICE;
+        this.ffmpegBrowser = null;
+        this.state = 'idle';
+        this.client = null;
+        this.startedAt = null;
+        this.lastError = null;
+        this.bytesReceived = 0;
+        this.framesReceived = 0;
+        this.framesWritten = 0;
+        this.framesDropped = 0;
+        // Latest-frame-only buffer
+        this.latestFrame = null;
+        this.writeTimer = null;
+    }
+
+    start(ws) {
+        if (this.client) {
+            ws.close(4009, 'Camera already in use for ' + this.serial);
+            return;
+        }
+
+        this.client = ws;
+        this.state = 'streaming';
+        this.startedAt = new Date();
+        this.bytesReceived = 0;
+        this.framesReceived = 0;
+        this.framesWritten = 0;
+        this.framesDropped = 0;
+        this.lastError = null;
+        this.latestFrame = null;
+
+        console.log('[camera:' + this.serial + '] Browser connected, latest-frame MJPEG → ' + this.v4l2Device);
+
+        // Stop global black feed and immediately start pipeline (no delay)
+        stopGlobalBlackFeed();
+        // Give black feed 200ms to release fd, then start
+        setTimeout(() => this._startPipeline(), 200);
+
+        // Each WS message = one complete JPEG frame
+        // We overwrite latestFrame on every message — only newest frame matters
+        ws.on('message', (data) => {
+            const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+            this.bytesReceived += buf.length;
+            this.framesReceived++;
+
+            // Overwrite — latest frame only
+            if (this.latestFrame !== null) {
+                this.framesDropped++;
+            }
+            this.latestFrame = buf;
+        });
+
+        ws.on('close', () => {
+            console.log('[camera:' + this.serial + '] Browser disconnected (recv=' + this.framesReceived +
+                ' written=' + this.framesWritten + ' dropped=' + this.framesDropped + ')');
+            this._stopPipeline();
+            this.client = null;
+            if (this.state !== 'stopped') {
+                this.state = 'idle';
+                setTimeout(() => startGlobalBlackFeed(), 300);
+            }
+        });
+
+        ws.on('error', (err) => {
+            console.error('[camera:' + this.serial + '] WS error: ' + err.message);
+            this._stopPipeline();
+            this.client = null;
+            if (this.state !== 'stopped') {
+                this.state = 'idle';
+                setTimeout(() => startGlobalBlackFeed(), 300);
+            }
+        });
+    }
+
+    _startPipeline() {
+        // FFmpeg: MJPEG from stdin → decode → YUV420P → v4l2loopback
+        // No scale needed — browser sends exact 640x480 matching v4l2loopback
+        // Low-latency: nobuffer, minimal probesize, zero analyzeduration
+        this.ffmpegBrowser = spawn('ffmpeg', [
+            '-hide_banner',
+            '-loglevel', 'warning',
+            '-fflags', 'nobuffer',
+            '-flags', 'low_delay',
+            '-probesize', '32',
+            '-analyzeduration', '0',
+            '-f', 'image2pipe',
+            '-vcodec', 'mjpeg',
+            '-i', 'pipe:0',
+            '-pix_fmt', 'yuv420p',
+            '-f', 'v4l2',
+            this.v4l2Device
+        ], {
+            stdio: ['pipe', 'ignore', 'pipe']
+        });
+
+        this.ffmpegBrowser.on('spawn', () => {
+            console.log('[camera:' + this.serial + '] FFmpeg started (PID ' + this.ffmpegBrowser.pid + ')');
+            // Start the write loop — pulls latest frame and writes to FFmpeg stdin
+            this._startWriteLoop();
+        });
+
+        this.ffmpegBrowser.stderr.on('data', (data) => {
+            const msg = data.toString().trim();
+            if (msg) console.log('[camera:' + this.serial + '] FFmpeg: ' + msg);
+        });
+
+        this.ffmpegBrowser.on('error', (err) => {
+            console.error('[camera:' + this.serial + '] FFmpeg error: ' + err.message);
+            this.lastError = err.message;
+        });
+
+        this.ffmpegBrowser.on('exit', (code, signal) => {
+            console.log('[camera:' + this.serial + '] FFmpeg exited: code=' + code + ' signal=' + signal);
+            this.ffmpegBrowser = null;
+            this._stopWriteLoop();
+        });
+    }
+
+    // Write loop: at fixed interval, take the latest frame and write to FFmpeg.
+    // If no new frame since last write — skip (don't re-send stale frame).
+    _startWriteLoop() {
+        const intervalMs = 1000 / CAMERA_FPS; // match target FPS
+        this.writeTimer = setInterval(() => {
+            if (!this.ffmpegBrowser || !this.ffmpegBrowser.stdin || this.ffmpegBrowser.stdin.destroyed) return;
+
+            const frame = this.latestFrame;
+            if (frame === null) return; // no new frame
+            this.latestFrame = null; // consume it
+
+            try {
+                const ok = this.ffmpegBrowser.stdin.write(frame);
+                this.framesWritten++;
+                // If write returns false, stdin buffer is full — next frame will be dropped naturally
+                // because latestFrame will be overwritten by the time buffer drains
+            } catch (err) {
+                // ignore write errors
+            }
+        }, intervalMs);
+    }
+
+    _stopWriteLoop() {
+        if (this.writeTimer) {
+            clearInterval(this.writeTimer);
+            this.writeTimer = null;
+        }
+        this.latestFrame = null;
+    }
+
+    _stopPipeline() {
+        this._stopWriteLoop();
+        if (this.ffmpegBrowser) {
+            if (this.ffmpegBrowser.stdin && !this.ffmpegBrowser.stdin.destroyed) {
+                try { this.ffmpegBrowser.stdin.end(); } catch (e) { /* ignore */ }
+            }
+            try { this.ffmpegBrowser.kill('SIGTERM'); } catch (e) { /* ignore */ }
+            setTimeout(() => {
+                if (this.ffmpegBrowser) {
+                    try { this.ffmpegBrowser.kill('SIGKILL'); } catch (e) { /* ignore */ }
+                    this.ffmpegBrowser = null;
+                }
+            }, 2000);
+            this.ffmpegBrowser = null;
+        }
+    }
+
+    stop() {
+        if (this.state === 'stopped') return;
+        console.log('[camera:' + this.serial + '] Stopping camera instance');
+        this.state = 'stopped';
+        this._stopPipeline();
+        if (this.client) {
+            try { this.client.close(1000, 'Camera stopped'); } catch (e) { /* ignore */ }
+            this.client = null;
+        }
+    }
+
+    toJSON() {
+        return {
+            serial: this.serial,
+            sinkIndex: this.sinkIndex,
+            v4l2Device: this.v4l2Device,
+            state: this.state,
+            hasClient: !!this.client,
+            bytesReceived: this.bytesReceived,
+            framesReceived: this.framesReceived,
+            framesWritten: this.framesWritten,
+            framesDropped: this.framesDropped,
+            startedAt: this.startedAt,
+            lastError: this.lastError,
+            ffmpegPid: this.ffmpegBrowser ? this.ffmpegBrowser.pid : null
+        };
+    }
+}
+
+// ===================== Global Black Feed =====================
+// Maintains a black video feed on v4l2loopback so the emulator always sees a camera.
+// CameraInstance stops this when browser streams, restarts when browser disconnects.
+
+let globalBlackFeedProcess = null;
+
+function startGlobalBlackFeed() {
+    if (globalBlackFeedProcess) return;
+
+    // Check if v4l2 device exists
+    try {
+        require('fs').accessSync(CAMERA_V4L2_DEVICE);
+    } catch (err) {
+        console.log('[camera] v4l2 device ' + CAMERA_V4L2_DEVICE + ' not available, skipping black feed');
+        return;
+    }
+
+    console.log('[camera] Starting global black feed → ' + CAMERA_V4L2_DEVICE);
+    globalBlackFeedProcess = spawn('ffmpeg', [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-re',
+        '-f', 'lavfi',
+        '-i', 'color=c=black:size=' + CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ':rate=' + CAMERA_FPS,
+        '-pix_fmt', 'yuv420p',
+        '-f', 'v4l2',
+        '-video_size', CAMERA_WIDTH + 'x' + CAMERA_HEIGHT,
+        CAMERA_V4L2_DEVICE
+    ], {
+        stdio: ['ignore', 'ignore', 'pipe']
+    });
+
+    globalBlackFeedProcess.stderr.on('data', (data) => {
+        const msg = data.toString().trim();
+        if (msg) console.log('[camera] Global black feed FFmpeg: ' + msg);
+    });
+
+    globalBlackFeedProcess.on('spawn', () => {
+        console.log('[camera] Global black feed started (PID ' + globalBlackFeedProcess.pid + ')');
+    });
+
+    globalBlackFeedProcess.on('exit', (code) => {
+        console.log('[camera] Global black feed exited: code=' + code);
+        globalBlackFeedProcess = null;
+        // Auto-restart after 2s unless a camera instance is streaming
+        setTimeout(() => {
+            let anyStreaming = false;
+            for (const [, inst] of cameraInstances) {
+                if (inst.state === 'streaming') { anyStreaming = true; break; }
+            }
+            if (!anyStreaming && !globalBlackFeedProcess) {
+                startGlobalBlackFeed();
+            }
+        }, 2000);
+    });
+
+    globalBlackFeedProcess.on('error', (err) => {
+        console.error('[camera] Global black feed error: ' + err.message);
+        globalBlackFeedProcess = null;
+    });
+}
+
+function stopGlobalBlackFeed() {
+    if (!globalBlackFeedProcess) return;
+    console.log('[camera] Stopping global black feed');
+    try { globalBlackFeedProcess.kill('SIGTERM'); } catch (e) { /* ignore */ }
+    setTimeout(() => {
+        if (globalBlackFeedProcess) {
+            try { globalBlackFeedProcess.kill('SIGKILL'); } catch (e) { /* ignore */ }
+            globalBlackFeedProcess = null;
+        }
+    }, 2000);
+    globalBlackFeedProcess = null;
+}
+
 // ===================== HTTP + WebSocket Server =====================
 
 const server = http.createServer((req, res) => {
@@ -928,8 +1359,14 @@ const server = http.createServer((req, res) => {
         for (const [serial, state] of micStateMonitor.states) {
             micStates[serial] = state;
         }
+        const cameraStatus = {};
+        for (const [serial, inst] of cameraInstances) cameraStatus[serial] = inst.toJSON();
+        const cameraStates = {};
+        for (const [serial, state] of cameraStateMonitor.states) {
+            cameraStates[serial] = state;
+        }
         res.writeHead(200);
-        res.end(JSON.stringify({ capture: status, mic: micStatus, micStates: micStates }, null, 2));
+        res.end(JSON.stringify({ capture: status, mic: micStatus, micStates: micStates, camera: cameraStatus, cameraStates: cameraStates }, null, 2));
         return;
     }
 
@@ -1045,6 +1482,51 @@ wss.on('connection', (ws, req) => {
         return;
     }
 
+    // Camera input: browser → emulator (video via v4l2loopback)
+    const cameraMatch = url.pathname.match(/^\/camera\/(.+)$/);
+    if (cameraMatch) {
+        const serial = decodeURIComponent(cameraMatch[1]);
+
+        // Resolve sinkIndex
+        let sinkIndex = null;
+        const captureInstance = instances.get(serial);
+        if (captureInstance) {
+            sinkIndex = captureInstance.sinkIndex;
+        } else {
+            const hostname = serial.split(':')[0];
+            const info = registry.resolve(hostname);
+            sinkIndex = info.sinkIndex;
+        }
+
+        // Get or create CameraInstance
+        let camInst = cameraInstances.get(serial);
+        if (!camInst || camInst.state === 'stopped') {
+            camInst = new CameraInstance(serial, sinkIndex);
+            cameraInstances.set(serial, camInst);
+        }
+
+        if (camInst.client) {
+            ws.close(4009, 'Camera already in use for ' + serial);
+            return;
+        }
+
+        camInst.start(ws);
+        return;
+    }
+
+    // Camera state subscription: browser subscribes to camera active/inactive changes
+    const cameraStateMatch = url.pathname.match(/^\/camera-state\/(.+)$/);
+    if (cameraStateMatch) {
+        const serial = decodeURIComponent(cameraStateMatch[1]);
+        console.log('[camera-state] Subscriber connected for ' + serial);
+        cameraStateMonitor.subscribe(serial, ws);
+
+        ws.on('close', () => {
+            console.log('[camera-state] Subscriber disconnected for ' + serial);
+        });
+        return;
+    }
+
     ws.close(4000, 'Invalid path');
 });
 
@@ -1063,25 +1545,39 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     console.log('[audio-capture-manager] Audio WS:  ws://0.0.0.0:' + MANAGER_PORT + '/audio/{serial}');
     console.log('[audio-capture-manager] Mic WS:    ws://0.0.0.0:' + MANAGER_PORT + '/mic/{serial}');
     console.log('[audio-capture-manager] Mic State:  ws://0.0.0.0:' + MANAGER_PORT + '/mic-state/{serial}');
+    console.log('[audio-capture-manager] Camera WS:  ws://0.0.0.0:' + MANAGER_PORT + '/camera/{serial}');
+    console.log('[audio-capture-manager] Camera State: ws://0.0.0.0:' + MANAGER_PORT + '/camera-state/{serial}');
     console.log('[audio-capture-manager] MIC_PIPE_DIR=' + MIC_PIPE_DIR);
+    console.log('[audio-capture-manager] CAMERA_V4L2_DEVICE=' + CAMERA_V4L2_DEVICE);
 
     // Start PA auto-discovery
     paMonitor.start();
     // Start mic state monitoring
     micStateMonitor.start();
+    // Start camera state monitoring
+    cameraStateMonitor.start();
+
+    // Start black feed on v4l2loopback to keep camera alive for emulators
+    startGlobalBlackFeed();
 });
 
 process.on('SIGTERM', () => {
     paMonitor.stop();
     micStateMonitor.stop();
+    cameraStateMonitor.stop();
+    stopGlobalBlackFeed();
     for (const [, inst] of instances) inst.stop();
     for (const [, inst] of micInstances) inst.stop();
+    for (const [, inst] of cameraInstances) inst.stop();
     server.close(() => process.exit(0));
 });
 process.on('SIGINT', () => {
     paMonitor.stop();
     micStateMonitor.stop();
+    cameraStateMonitor.stop();
+    stopGlobalBlackFeed();
     for (const [, inst] of instances) inst.stop();
     for (const [, inst] of micInstances) inst.stop();
+    for (const [, inst] of cameraInstances) inst.stop();
     server.close(() => process.exit(0));
 });

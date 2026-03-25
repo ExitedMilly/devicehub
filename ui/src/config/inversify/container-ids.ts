@@ -31,6 +31,7 @@ import type { GroupItemService } from '@/services/group-item-service/group-item-
 import type { DeviceScreenStore } from '@/store/device-screen-store/device-screen-store'
 import type { DeviceAudioStore } from '@/store/device-audio-store'
 import type { DeviceMicStore } from '@/store/device-mic-store'
+import type { DeviceCameraStore } from '@/store/device-camera-store'
 import type { LogsTrackerService } from '@/services/logs-tracker-service/logs-tracker-service'
 import type { PortForwardingService } from '@/services/port-forwarding-service/port-forwarding-service'
 import type { ApplicationInstallationService } from '@/services/application-installation/application-installation-service'
@@ -61,6 +62,7 @@ export const CONTAINER_IDS = {
   deviceScreenStore: Symbol.for('DeviceScreenStore') as interfaces.ServiceIdentifier<DeviceScreenStore>,
   deviceAudioStore: Symbol.for('DeviceAudioStore') as interfaces.ServiceIdentifier<DeviceAudioStore>,
   deviceMicStore: Symbol.for('DeviceMicStore') as interfaces.ServiceIdentifier<DeviceMicStore>,
+  deviceCameraStore: Symbol.for('DeviceCameraStore') as interfaces.ServiceIdentifier<DeviceCameraStore>,
   accessTokenService: Symbol.for('AccessTokenService') as interfaces.ServiceIdentifier<AccessTokenService>,
   deviceControlStore: Symbol.for('DeviceControlStore') as interfaces.ServiceIdentifier<DeviceControlStore>,
   logsTrackerService: Symbol.for('LogsTrackerService') as interfaces.ServiceIdentifier<LogsTrackerService>,

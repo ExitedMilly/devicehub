@@ -21,6 +21,7 @@ import { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import { DeviceScreenStore } from '@/store/device-screen-store/device-screen-store'
 import { DeviceAudioStore } from '@/store/device-audio-store'
 import { DeviceMicStore } from '@/store/device-mic-store'
+import { DeviceCameraStore } from '@/store/device-camera-store'
 
 /* NOTE:
   Creating a container for a specific device, isolating its dependencies, and ensuring that the
@@ -52,6 +53,7 @@ export const createDeviceContainer = (serial: string): Container => {
   deviceContainer.bind(CONTAINER_IDS.deviceScreenStore).to(DeviceScreenStore)
   deviceContainer.bind(CONTAINER_IDS.deviceAudioStore).to(DeviceAudioStore)
   deviceContainer.bind(CONTAINER_IDS.deviceMicStore).to(DeviceMicStore)
+  deviceContainer.bind(CONTAINER_IDS.deviceCameraStore).to(DeviceCameraStore)
   deviceContainer.bind(CONTAINER_IDS.deviceControlStore).to(DeviceControlStore)
   deviceContainer.bind(CONTAINER_IDS.deviceBySerialStore).to(DeviceBySerialStore)
   deviceContainer.bind(CONTAINER_IDS.fileExplorerService).to(FileExplorerService)
