@@ -986,7 +986,6 @@ class MicrophoneInstance {
     }
 
     _stopPipeline() {
-        this._writeInFlight = false;
     if (this._writerTimer) {
         clearInterval(this._writerTimer);
         this._writerTimer = null;
@@ -1077,116 +1076,6 @@ class MicrophoneInstance {
 
 const fs = require('fs');
 
-let cameraWriterProcess = null;
-
-function startCameraWriter() {
-    if (cameraWriterProcess) return;
-
-    try {
-        require('fs').accessSync(CAMERA_V4L2_DEVICE);
-    } catch (err) {
-        console.log('[camera] v4l2 device ' + CAMERA_V4L2_DEVICE + ' not available, skipping camera writer');
-        return;
-    }
-
-    const writerPath = path.join(__dirname, 'camera-writer.js');
-
-    console.log('[camera] Starting persistent camera-writer: ' +
-        CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ' @' + CAMERA_FPS + 'fps → ' + CAMERA_V4L2_DEVICE);
-
-    cameraWriterProcess = spawn('node', [
-        writerPath,
-        String(CAMERA_WIDTH),
-        String(CAMERA_HEIGHT),
-        String(CAMERA_FPS),
-        CAMERA_V4L2_DEVICE
-    ], {
-        stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    cameraWriterProcess.stdout.on('data', (data) => {
-        const msg = data.toString().trim();
-        if (msg) {
-            for (const line of msg.split('\n')) {
-                console.log('[camera] ' + line);
-            }
-        }
-    });
-
-    cameraWriterProcess.stderr.on('data', (data) => {
-        const msg = data.toString().trim();
-        if (msg) console.error('[camera] writer-err: ' + msg);
-    });
-
-    cameraWriterProcess.on('spawn', () => {
-        console.log('[camera] Camera writer started (PID ' + cameraWriterProcess.pid + ')');
-    });
-
-    cameraWriterProcess.on('exit', (code) => {
-        console.log('[camera] Camera writer exited: code=' + code);
-        cameraWriterProcess = null;
-        // Auto-restart after 2s
-        setTimeout(() => {
-            if (!cameraWriterProcess) {
-                console.log('[camera] Auto-restarting camera writer...');
-                startCameraWriter();
-            }
-        }, 2000);
-    });
-
-    cameraWriterProcess.on('error', (err) => {
-        console.error('[camera] Camera writer error: ' + err.message);
-        cameraWriterProcess = null;
-    });
-}
-
-function stopCameraWriter() {
-    if (!cameraWriterProcess) return;
-    console.log('[camera] Stopping camera writer');
-    if (cameraWriterProcess.stdin && !cameraWriterProcess.stdin.destroyed) {
-        try { cameraWriterProcess.stdin.end(); } catch (e) { /* ignore */ }
-    }
-    try { cameraWriterProcess.kill('SIGTERM'); } catch (e) { /* ignore */ }
-    setTimeout(() => {
-        if (cameraWriterProcess) {
-            try { cameraWriterProcess.kill('SIGKILL'); } catch (e) { /* ignore */ }
-            cameraWriterProcess = null;
-        }
-    }, 2000);
-    cameraWriterProcess = null;
-}
-
-// Write a raw YUV frame to the persistent writer
-// Returns true if written, false if dropped
-function writeCameraFrame(frameData) {
-    if (!cameraWriterProcess || !cameraWriterProcess.stdin || cameraWriterProcess.stdin.destroyed) {
-        return false;
-    }
-    // Backpressure check: don't overflow the pipe
-    if (cameraWriterProcess.stdin.writableLength > cameraWriterProcess.stdin.writableHighWaterMark * 2) {
-        return false;
-    }
-    try {
-        cameraWriterProcess.stdin.write(frameData);
-        return true;
-    } catch (err) {
-        return false;
-    }
-}
-
-// Backward compatibility aliases (used in startup/shutdown code)
-function startGlobalBlackFeed() {
-    startCameraWriter();
-}
-
-function stopGlobalBlackFeed() {
-    // NO-OP: writer stays alive, just writes black frames when idle.
-    // Only stopCameraWriter() actually kills it (on SIGTERM).
-}
-
-
-// ===================== Camera Instance =====================
-
 class CameraInstance {
     constructor(serial, sinkIndex) {
         this.serial = serial;
@@ -1194,16 +1083,25 @@ class CameraInstance {
         this.hostname = serial.split(':')[0];
         this.v4l2Device = CAMERA_V4L2_DEVICE;
         this.state = 'idle';
-        this.client = null;
+        this.client = null; // WS used for signaling
         this.startedAt = null;
         this.lastError = null;
         this.bytesReceived = 0;
         this.framesReceived = 0;
         this.framesWritten = 0;
         this.framesDropped = 0;
-        // WebRTC
+        // WebRTC (@roamhq/wrtc)
         this.peerConnection = null;
-        this.videoSink = null;
+        this.videoSink = null;      // RTCVideoSink — delivers decoded I420 frames
+        this.ffmpegWriter = null;   // thin rawvideo → v4l2 pipe (no decoding!)
+        this._ffmpegReady = false;
+        this._draining = false;
+        this._lastFrameTime = 0;
+        this._inputWidth = null;
+        this._inputHeight = null;
+        this._latestFrame = null;
+        this._latestFrameMeta = null;
+        this._writerTimer = null;
     }
 
     start(ws) {
@@ -1223,6 +1121,7 @@ class CameraInstance {
 
         console.log('[camera:' + this.serial + '] Browser connected, awaiting WebRTC signaling');
 
+        // WS messages are JSON signaling
         ws.on('message', (data) => {
             try {
                 const msg = JSON.parse(data.toString());
@@ -1242,7 +1141,7 @@ class CameraInstance {
             this.client = null;
             if (this.state !== 'stopped') {
                 this.state = 'idle';
-                // Writer auto-falls back to black frames — no action needed
+                setTimeout(() => startGlobalBlackFeed(), 300);
             }
         });
 
@@ -1252,6 +1151,7 @@ class CameraInstance {
             this.client = null;
             if (this.state !== 'stopped') {
                 this.state = 'idle';
+                setTimeout(() => startGlobalBlackFeed(), 300);
             }
         });
     }
@@ -1274,35 +1174,49 @@ class CameraInstance {
     async _handleOffer(msg) {
         console.log('[camera:' + this.serial + '] Received SDP offer');
 
-        // Close previous WebRTC (but NOT the writer — it stays alive)
+        // Stop any previous peer connection
         this._stopPipeline();
 
+        // Stop global black feed before starting WebRTC pipeline
+        stopGlobalBlackFeed();
+
+        // Create @roamhq/wrtc PeerConnection — standard browser-compatible API
+        // Uses Google's libwebrtc C++ engine — proper ICE, STUN, DTLS, everything works
         this.peerConnection = new RTCPeerConnection({
             iceServers: [
                 { urls: 'stun:stun.cloudflare.com:3478' },
             ],
-            portRange: { min: 40000, max: 40010 },
+            portRange: {
+                min: 40000,
+                max: 40010,
+            },
         });
 
+        // Add transceiver for receiving video
         this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
 
+        // Buffer ICE candidates until answer is sent
         const pendingCandidates = [];
         let answerSent = false;
 
+        // Handle ICE candidates — standard API
         this.peerConnection.onicecandidate = (event) => {
             if (!event.candidate) return;
             if (!this.client || this.client.readyState !== WebSocket.OPEN) return;
-            const candidateMsg = JSON.stringify({
+
+            const msg = JSON.stringify({
                 type: 'candidate',
                 candidate: event.candidate.toJSON(),
             });
+
             if (answerSent) {
-                this.client.send(candidateMsg);
+                this.client.send(msg);
             } else {
-                pendingCandidates.push(candidateMsg);
+                pendingCandidates.push(msg);
             }
         };
 
+        // Handle incoming video track — standard API
         this.peerConnection.ontrack = (event) => {
             const track = event.track;
             if (track.kind !== 'video') return;
@@ -1310,49 +1224,49 @@ class CameraInstance {
             console.log('[camera:' + this.serial + '] Video track received');
             this.state = 'streaming';
 
+            // RTCVideoSink: libwebrtc decodes H.264/VP8 internally
+            // and delivers raw I420 (YUV420P) frames — no FFmpeg decode needed!
             this.videoSink = new RTCVideoSink(track);
 
             this.videoSink.onframe = ({ frame }) => {
                 this.framesReceived++;
                 this.bytesReceived += frame.data.length;
 
-                // Only accept target resolution
-                if (frame.width !== CAMERA_WIDTH || frame.height !== CAMERA_HEIGHT) {
-                    this.framesDropped++;
-                    if (this.framesDropped <= 10 || this.framesDropped % 50 === 0) {
-                        console.log('[camera:' + this.serial + '] Skip ' +
-                            frame.width + 'x' + frame.height +
-                            ' (want ' + CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ')' +
-                            ' dropped=' + this.framesDropped);
+                const sizeChanged =
+                    this._inputWidth !== frame.width ||
+                    this._inputHeight !== frame.height;
+
+                if (!this.ffmpegWriter || sizeChanged) {
+                    if (sizeChanged && this.ffmpegWriter) {
+                        console.log(
+                            '[camera:' + this.serial + '] Frame size changed: ' +
+                            this._inputWidth + 'x' + this._inputHeight + ' -> ' +
+                            frame.width + 'x' + frame.height + ', restarting writer'
+                        );
+                        this._stopFrameWriterOnly();
                     }
-                    return;
+
+                    this._inputWidth = frame.width;
+                    this._inputHeight = frame.height;
+                    this._startFrameWriter(frame.width, frame.height);
                 }
 
-                // Write to persistent camera writer
-                const written = writeCameraFrame(Buffer.from(frame.data.buffer));
-                if (written) {
-                    this.framesWritten++;
-                    if (this.framesWritten <= 5) {
-                        console.log('[camera:' + this.serial + '] Frame #' + this.framesWritten +
-                            ': ' + frame.width + 'x' + frame.height +
-                            ' (' + frame.data.length + 'B)' +
-                            ' dropped=' + this.framesDropped);
-                    }
-                } else {
-                    this.framesDropped++;
-                }
+                this._writeFrame(frame);
             };
         };
 
+        // Connection state — standard API
         this.peerConnection.onconnectionstatechange = () => {
             const state = this.peerConnection ? this.peerConnection.connectionState : 'unknown';
             console.log('[camera:' + this.serial + '] Connection state: ' + state);
         };
 
+        // Set remote description (browser's offer) — standard API
         await this.peerConnection.setRemoteDescription(
             new RTCSessionDescription({ type: 'offer', sdp: msg.sdp })
         );
 
+        // Create and send answer
         const answer = await this.peerConnection.createAnswer();
         await this.peerConnection.setLocalDescription(answer);
 
@@ -1364,6 +1278,7 @@ class CameraInstance {
             answerSent = true;
             console.log('[camera:' + this.serial + '] Sent SDP answer');
 
+            // Flush any ICE candidates that were buffered while waiting
             for (const candidate of pendingCandidates) {
                 this.client.send(candidate);
             }
@@ -1373,20 +1288,195 @@ class CameraInstance {
         }
     }
 
-    // Only closes WebRTC. Does NOT touch the camera writer.
-    _stopPipeline() {
-        if (this.videoSink) {
-            try { this.videoSink.stop(); } catch (e) { /* ignore */ }
-            this.videoSink = null;
+    // Start FFmpeg as thin rawvideo → v4l2 pipe.
+    // No decoding — libwebrtc already decoded to I420.
+    // FFmpeg just handles v4l2 format negotiation.
+    _startFrameWriter(width, height) {
+    if (this.ffmpegWriter) return;
+
+    console.log('[camera:' + this.serial + '] Starting frame writer: ' +
+        width + 'x' + height + ' → ' + CAMERA_WIDTH + 'x' + CAMERA_HEIGHT +
+        ' → v4l2 (' + this.v4l2Device + ')');
+
+    this._ffmpegReady = false;
+
+    const ffmpegArgs = [
+        '-hide_banner',
+        '-loglevel', 'info',
+        '-stats',
+        '-f', 'rawvideo',
+        '-framerate', '15',
+        '-pixel_format', 'yuv420p',
+        '-video_size', width + 'x' + height,
+        '-i', 'pipe:0',
+        '-vf', 'scale=' + CAMERA_WIDTH + ':' + CAMERA_HEIGHT + ':flags=fast_bilinear',
+        '-pix_fmt', 'yuv420p',
+        '-f', 'v4l2',
+        this.v4l2Device,
+    ];
+
+    this.ffmpegWriter = spawn('ffmpeg', ffmpegArgs, {
+        stdio: ['pipe', 'ignore', 'pipe']
+    });
+
+    const thisWriter = this.ffmpegWriter;
+
+    this.ffmpegWriter.on('spawn', () => {
+        console.log('[camera:' + this.serial + '] Frame writer started (PID ' +
+            thisWriter.pid + ')');
+    });
+
+    this.ffmpegWriter.stderr.on('data', (data) => {
+        const msg = data.toString().trim();
+        if (msg) console.log('[camera:' + this.serial + '] FFmpeg: ' + msg);
+        if (!this._ffmpegReady && (msg.includes('frame=') || msg.includes('Output #0'))) {
+            this._ffmpegReady = true;
+            console.log('[camera:' + this.serial + '] FFmpeg ready — starting frame delivery');
         }
-        if (this.peerConnection) {
-            this.peerConnection.onicecandidate = null;
-            this.peerConnection.ontrack = null;
-            this.peerConnection.onconnectionstatechange = null;
-            try { this.peerConnection.close(); } catch (e) { /* ignore */ }
-            this.peerConnection = null;
+    });
+
+    this.ffmpegWriter.on('error', (err) => {
+        console.error('[camera:' + this.serial + '] Frame writer error: ' + err.message);
+        this.lastError = err.message;
+    });
+
+    this.ffmpegWriter.on('exit', (code, signal) => {
+        console.log('[camera:' + this.serial + '] Frame writer exited: code=' + code + ' signal=' + signal);
+        if (this.ffmpegWriter === thisWriter) {
+            this.ffmpegWriter = null;
+            this._ffmpegReady = false;
         }
+    });
+
+    this._lastFrameTime = 0;
+    this._draining = false;
+
+    if (this._writerTimer) {
+        clearInterval(this._writerTimer);
+        this._writerTimer = null;
     }
+
+    this._latestFrame = null;
+    this._latestFrameMeta = null;
+
+    this._writerTimer = setInterval(() => {
+        if (!this.ffmpegWriter || !this.ffmpegWriter.stdin || this.ffmpegWriter.stdin.destroyed) return;
+        if (!this._ffmpegReady) return;
+        if (this._draining) return;
+        if (!this._latestFrame) return;
+
+        const frameBuf = this._latestFrame;
+        const meta = this._latestFrameMeta;
+
+        this._latestFrame = null;
+        this._latestFrameMeta = null;
+
+        try {
+            const ok = this.ffmpegWriter.stdin.write(frameBuf);
+            this.framesWritten++;
+            this._lastFrameTime = Date.now();
+
+            if (this.framesWritten <= 10) {
+                console.log('[camera:' + this.serial + '] Write live frame #' + this.framesWritten +
+                    ': ' + meta.width + 'x' + meta.height +
+                    ' bytes=' + meta.bytes +
+                    ' dropped=' + this.framesDropped);
+            }
+
+            if (!ok) {
+                this._draining = true;
+                this.ffmpegWriter.stdin.once('drain', () => {
+                    this._draining = false;
+                });
+            }
+        } catch (err) {
+            this.framesDropped++;
+        }
+    }, 66);
+}
+
+    _stopFrameWriterOnly() {
+    if (this._writerTimer) {
+        clearInterval(this._writerTimer);
+        this._writerTimer = null;
+    }
+
+    this._latestFrame = null;
+    this._latestFrameMeta = null;
+
+    if (this.ffmpegWriter) {
+        const oldWriter = this.ffmpegWriter;
+        this.ffmpegWriter = null;
+
+        if (oldWriter.stdin && !oldWriter.stdin.destroyed) {
+            try { oldWriter.stdin.end(); } catch (e) { /* ignore */ }
+        }
+        try { oldWriter.kill('SIGTERM'); } catch (e) { /* ignore */ }
+    }
+
+    this._ffmpegReady = false;
+    this._draining = false;
+    this._lastFrameTime = 0;
+}
+
+_writeFrame(frame) {
+    if (!this.ffmpegWriter || !this.ffmpegWriter.stdin || this.ffmpegWriter.stdin.destroyed) {
+        this.framesDropped++;
+        return;
+    }
+
+    try {
+        const frameBuf = Buffer.from(frame.data);
+
+        if (this._latestFrame) {
+            this.framesDropped++;
+        }
+
+        this._latestFrame = frameBuf;
+        this._latestFrameMeta = {
+            width: frame.width,
+            height: frame.height,
+            bytes: frameBuf.length,
+        };
+
+        if (this.framesReceived <= 10) {
+            console.log('[camera:' + this.serial + '] Queue frame #' + this.framesReceived +
+                ': ' + frame.width + 'x' + frame.height +
+                ' bytes=' + frameBuf.length +
+                ' dropped=' + this.framesDropped);
+        }
+    } catch (err) {
+        this.framesDropped++;
+    }
+}
+
+    _stopPipeline() {
+    if (this.videoSink) {
+        try { this.videoSink.stop(); } catch (e) { /* ignore */ }
+        this.videoSink = null;
+    }
+    if (this.peerConnection) {
+        this.peerConnection.onicecandidate = null;
+        this.peerConnection.ontrack = null;
+        this.peerConnection.onconnectionstatechange = null;
+        try { this.peerConnection.close(); } catch (e) { /* ignore */ }
+        this.peerConnection = null;
+    }
+    if (this.ffmpegWriter) {
+        if (this.ffmpegWriter.stdin && !this.ffmpegWriter.stdin.destroyed) {
+            try { this.ffmpegWriter.stdin.end(); } catch (e) { /* ignore */ }
+        }
+        try { this.ffmpegWriter.kill('SIGTERM'); } catch (e) { /* ignore */ }
+        setTimeout(() => {
+            if (this.ffmpegWriter) {
+                try { this.ffmpegWriter.kill('SIGKILL'); } catch (e) { /* ignore */ }
+                this.ffmpegWriter = null;
+            }
+        }, 2000);
+        this.ffmpegWriter = null;
+    }
+    this._draining = false;
+}
 
     stop() {
         if (this.state === 'stopped') return;
@@ -1412,10 +1502,86 @@ class CameraInstance {
             framesDropped: this.framesDropped,
             startedAt: this.startedAt,
             lastError: this.lastError,
-            writerPid: cameraWriterProcess ? cameraWriterProcess.pid : null
+            ffmpegPid: this.ffmpegWriter ? this.ffmpegWriter.pid : null
         };
     }
 }
+
+// ===================== Global Black Feed =====================
+// Maintains a black video feed on v4l2loopback so the emulator always sees a camera.
+// CameraInstance stops this when browser streams, restarts when browser disconnects.
+
+let globalBlackFeedProcess = null;
+
+function startGlobalBlackFeed() {
+    if (globalBlackFeedProcess) return;
+
+    // Check if v4l2 device exists
+    try {
+        require('fs').accessSync(CAMERA_V4L2_DEVICE);
+    } catch (err) {
+        console.log('[camera] v4l2 device ' + CAMERA_V4L2_DEVICE + ' not available, skipping black feed');
+        return;
+    }
+
+    console.log('[camera] Starting global black feed → ' + CAMERA_V4L2_DEVICE);
+    globalBlackFeedProcess = spawn('ffmpeg', [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-re',
+        '-f', 'lavfi',
+        '-i', 'color=c=black:size=' + CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ':rate=' + CAMERA_FPS,
+        '-pix_fmt', 'yuv420p',
+        '-f', 'v4l2',
+        '-video_size', CAMERA_WIDTH + 'x' + CAMERA_HEIGHT,
+        CAMERA_V4L2_DEVICE
+    ], {
+        stdio: ['ignore', 'ignore', 'pipe']
+    });
+
+    globalBlackFeedProcess.stderr.on('data', (data) => {
+        const msg = data.toString().trim();
+        if (msg) console.log('[camera] Global black feed FFmpeg: ' + msg);
+    });
+
+    globalBlackFeedProcess.on('spawn', () => {
+        console.log('[camera] Global black feed started (PID ' + globalBlackFeedProcess.pid + ')');
+    });
+
+    globalBlackFeedProcess.on('exit', (code) => {
+        console.log('[camera] Global black feed exited: code=' + code);
+        globalBlackFeedProcess = null;
+        // Auto-restart after 2s unless a camera instance is streaming
+        setTimeout(() => {
+            let anyStreaming = false;
+            for (const [, inst] of cameraInstances) {
+                if (inst.state === 'streaming') { anyStreaming = true; break; }
+            }
+            if (!anyStreaming && !globalBlackFeedProcess) {
+                startGlobalBlackFeed();
+            }
+        }, 2000);
+    });
+
+    globalBlackFeedProcess.on('error', (err) => {
+        console.error('[camera] Global black feed error: ' + err.message);
+        globalBlackFeedProcess = null;
+    });
+}
+
+function stopGlobalBlackFeed() {
+    if (!globalBlackFeedProcess) return;
+    console.log('[camera] Stopping global black feed');
+    try { globalBlackFeedProcess.kill('SIGTERM'); } catch (e) { /* ignore */ }
+    setTimeout(() => {
+        if (globalBlackFeedProcess) {
+            try { globalBlackFeedProcess.kill('SIGKILL'); } catch (e) { /* ignore */ }
+            globalBlackFeedProcess = null;
+        }
+    }, 2000);
+    globalBlackFeedProcess = null;
+}
+
 // ===================== HTTP + WebSocket Server =====================
 
 const server = http.createServer((req, res) => {
@@ -1650,7 +1816,7 @@ process.on('SIGTERM', () => {
     paMonitor.stop();
     micStateMonitor.stop();
     cameraStateMonitor.stop();
-    stopCameraWriter();  
+    stopGlobalBlackFeed();
     for (const [, inst] of instances) inst.stop();
     for (const [, inst] of micInstances) inst.stop();
     for (const [, inst] of cameraInstances) inst.stop();
@@ -1660,7 +1826,7 @@ process.on('SIGINT', () => {
     paMonitor.stop();
     micStateMonitor.stop();
     cameraStateMonitor.stop();
-    stopCameraWriter();  
+    stopGlobalBlackFeed();
     for (const [, inst] of instances) inst.stop();
     for (const [, inst] of micInstances) inst.stop();
     for (const [, inst] of cameraInstances) inst.stop();

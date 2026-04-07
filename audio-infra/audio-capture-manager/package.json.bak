@@ -1,12 +1,12 @@
 {
   "name": "audio-capture-manager",
-  "version": "0.4.0",
+  "version": "0.3.0",
   "description": "Manages FFmpeg audio capture, mic input, and WebRTC camera for DeviceHub emulators",
   "main": "manager.js",
   "dependencies": {
     "ws": "^8.16.0",
     "@grpc/grpc-js": "^1.10.0",
     "@grpc/proto-loader": "^0.7.0",
-    "@roamhq/wrtc": "^0.10.0"
+    "werift": "^0.22.2"
   }
 }

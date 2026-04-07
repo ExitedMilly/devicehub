@@ -7,8 +7,7 @@ const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 
 // WebRTC for camera input
-const { RTCPeerConnection, RTCSessionDescription } = require('@roamhq/wrtc');
-const { RTCVideoSink } = require('@roamhq/wrtc').nonstandard;
+const werift = require('werift');
 
 const MANAGER_PORT = parseInt(process.env.MANAGER_PORT || '7600');
 const PA_SERVER = process.env.PA_SERVER || 'unix:/run/pulse/shared.sock';
@@ -986,36 +985,22 @@ class MicrophoneInstance {
     }
 
     _stopPipeline() {
-        this._writeInFlight = false;
-    if (this._writerTimer) {
-        clearInterval(this._writerTimer);
-        this._writerTimer = null;
+        if (this.pcmTimer) {
+            clearInterval(this.pcmTimer);
+            this.pcmTimer = null;
+        }
+        if (this.ffmpeg) {
+            if (this.ffmpeg.stdin && !this.ffmpeg.stdin.destroyed) {
+                this.ffmpeg.stdin.end();
+            }
+            try { this.ffmpeg.kill('SIGKILL'); } catch (e) { /* ignore */ }
+            this.ffmpeg = null;
+        }
+        if (this.grpcCall) {
+            try { this.grpcCall.end(); } catch (e) { /* ignore */ }
+            this.grpcCall = null;
+        }
     }
-    this._latestFrame = null;
-    this._latestFrameMeta = null;
-    if (this.videoSink) {
-        try { this.videoSink.stop(); } catch (e) { /* ignore */ }
-        this.videoSink = null;
-    }
-    if (this.peerConnection) {
-        this.peerConnection.onicecandidate = null;
-        this.peerConnection.ontrack = null;
-        this.peerConnection.onconnectionstatechange = null;
-        try { this.peerConnection.close(); } catch (e) { /* ignore */ }
-        this.peerConnection = null;
-    }
-    // Close v4l2 device
-    if (this._v4l2fd) {
-        try { require('fs').closeSync(this._v4l2fd); } catch (e) { /* ignore */ }
-        this._v4l2fd = null;
-    }
-    // Stop any ffmpegWriter (legacy)
-    if (this.ffmpegWriter) {
-        try { this.ffmpegWriter.kill('SIGTERM'); } catch (e) { /* ignore */ }
-        this.ffmpegWriter = null;
-    }
-    this._draining = false;
-}
 
     stop() {
         if (this.state === 'stopped') return;
@@ -1077,116 +1062,6 @@ class MicrophoneInstance {
 
 const fs = require('fs');
 
-let cameraWriterProcess = null;
-
-function startCameraWriter() {
-    if (cameraWriterProcess) return;
-
-    try {
-        require('fs').accessSync(CAMERA_V4L2_DEVICE);
-    } catch (err) {
-        console.log('[camera] v4l2 device ' + CAMERA_V4L2_DEVICE + ' not available, skipping camera writer');
-        return;
-    }
-
-    const writerPath = path.join(__dirname, 'camera-writer.js');
-
-    console.log('[camera] Starting persistent camera-writer: ' +
-        CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ' @' + CAMERA_FPS + 'fps → ' + CAMERA_V4L2_DEVICE);
-
-    cameraWriterProcess = spawn('node', [
-        writerPath,
-        String(CAMERA_WIDTH),
-        String(CAMERA_HEIGHT),
-        String(CAMERA_FPS),
-        CAMERA_V4L2_DEVICE
-    ], {
-        stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    cameraWriterProcess.stdout.on('data', (data) => {
-        const msg = data.toString().trim();
-        if (msg) {
-            for (const line of msg.split('\n')) {
-                console.log('[camera] ' + line);
-            }
-        }
-    });
-
-    cameraWriterProcess.stderr.on('data', (data) => {
-        const msg = data.toString().trim();
-        if (msg) console.error('[camera] writer-err: ' + msg);
-    });
-
-    cameraWriterProcess.on('spawn', () => {
-        console.log('[camera] Camera writer started (PID ' + cameraWriterProcess.pid + ')');
-    });
-
-    cameraWriterProcess.on('exit', (code) => {
-        console.log('[camera] Camera writer exited: code=' + code);
-        cameraWriterProcess = null;
-        // Auto-restart after 2s
-        setTimeout(() => {
-            if (!cameraWriterProcess) {
-                console.log('[camera] Auto-restarting camera writer...');
-                startCameraWriter();
-            }
-        }, 2000);
-    });
-
-    cameraWriterProcess.on('error', (err) => {
-        console.error('[camera] Camera writer error: ' + err.message);
-        cameraWriterProcess = null;
-    });
-}
-
-function stopCameraWriter() {
-    if (!cameraWriterProcess) return;
-    console.log('[camera] Stopping camera writer');
-    if (cameraWriterProcess.stdin && !cameraWriterProcess.stdin.destroyed) {
-        try { cameraWriterProcess.stdin.end(); } catch (e) { /* ignore */ }
-    }
-    try { cameraWriterProcess.kill('SIGTERM'); } catch (e) { /* ignore */ }
-    setTimeout(() => {
-        if (cameraWriterProcess) {
-            try { cameraWriterProcess.kill('SIGKILL'); } catch (e) { /* ignore */ }
-            cameraWriterProcess = null;
-        }
-    }, 2000);
-    cameraWriterProcess = null;
-}
-
-// Write a raw YUV frame to the persistent writer
-// Returns true if written, false if dropped
-function writeCameraFrame(frameData) {
-    if (!cameraWriterProcess || !cameraWriterProcess.stdin || cameraWriterProcess.stdin.destroyed) {
-        return false;
-    }
-    // Backpressure check: don't overflow the pipe
-    if (cameraWriterProcess.stdin.writableLength > cameraWriterProcess.stdin.writableHighWaterMark * 2) {
-        return false;
-    }
-    try {
-        cameraWriterProcess.stdin.write(frameData);
-        return true;
-    } catch (err) {
-        return false;
-    }
-}
-
-// Backward compatibility aliases (used in startup/shutdown code)
-function startGlobalBlackFeed() {
-    startCameraWriter();
-}
-
-function stopGlobalBlackFeed() {
-    // NO-OP: writer stays alive, just writes black frames when idle.
-    // Only stopCameraWriter() actually kills it (on SIGTERM).
-}
-
-
-// ===================== Camera Instance =====================
-
 class CameraInstance {
     constructor(serial, sinkIndex) {
         this.serial = serial;
@@ -1194,7 +1069,7 @@ class CameraInstance {
         this.hostname = serial.split(':')[0];
         this.v4l2Device = CAMERA_V4L2_DEVICE;
         this.state = 'idle';
-        this.client = null;
+        this.client = null; // WS used for signaling
         this.startedAt = null;
         this.lastError = null;
         this.bytesReceived = 0;
@@ -1203,7 +1078,11 @@ class CameraInstance {
         this.framesDropped = 0;
         // WebRTC
         this.peerConnection = null;
-        this.videoSink = null;
+        this.ffmpegDecoder = null;
+        this.videoCodec = null;
+        // H.264 depacketization state
+        this.nalBuffer = null;
+        this.fuAStarted = false;
     }
 
     start(ws) {
@@ -1223,6 +1102,7 @@ class CameraInstance {
 
         console.log('[camera:' + this.serial + '] Browser connected, awaiting WebRTC signaling');
 
+        // WS messages are JSON signaling
         ws.on('message', (data) => {
             try {
                 const msg = JSON.parse(data.toString());
@@ -1235,14 +1115,15 @@ class CameraInstance {
         ws.on('close', (code, reason) => {
             console.log('[camera:' + this.serial + '] Browser disconnected (code=' + code +
                 ' reason=' + (reason || 'none') +
-                ' frames=' + this.framesReceived +
-                ' written=' + this.framesWritten +
-                ' dropped=' + this.framesDropped + ')');
+                ' recv=' + this.framesReceived +
+                ' written=' + this.framesWritten + ' dropped=' + this.framesDropped +
+                ' stdinBytes=' + (this._stdinBytesWritten || 0) +
+                ' nals=' + (this._nalWriteCount || 0) + ')');
             this._stopPipeline();
             this.client = null;
             if (this.state !== 'stopped') {
                 this.state = 'idle';
-                // Writer auto-falls back to black frames — no action needed
+                setTimeout(() => startGlobalBlackFeed(), 300);
             }
         });
 
@@ -1252,6 +1133,7 @@ class CameraInstance {
             this.client = null;
             if (this.state !== 'stopped') {
                 this.state = 'idle';
+                setTimeout(() => startGlobalBlackFeed(), 300);
             }
         });
     }
@@ -1261,6 +1143,13 @@ class CameraInstance {
             if (msg.type === 'offer') {
                 await this._handleOffer(msg);
             } else if (msg.type === 'candidate' && msg.candidate) {
+                const candidateStr = msg.candidate && msg.candidate.candidate ? msg.candidate.candidate : JSON.stringify(msg.candidate);
+                const allowedIp = process.env.ICE_HOST_ADDRESS || '192.168.0.113';
+                const allowed = candidateStr.includes(' typ host') && candidateStr.includes(' ' + allowedIp + ' ');
+                if (!allowed) {
+                    console.log('[camera:' + this.serial + '] Drop remote ICE candidate: ' + candidateStr);
+                    return;
+                }
                 if (this.peerConnection) {
                     await this.peerConnection.addIceCandidate(msg.candidate);
                 }
@@ -1274,85 +1163,129 @@ class CameraInstance {
     async _handleOffer(msg) {
         console.log('[camera:' + this.serial + '] Received SDP offer');
 
-        // Close previous WebRTC (but NOT the writer — it stays alive)
-        this._stopPipeline();
+        // Stop any previous peer connection
+        if (this.peerConnection) {
+            try { this.peerConnection.close(); } catch (e) { /* ignore */ }
+        }
 
-        this.peerConnection = new RTCPeerConnection({
-            iceServers: [
-                { urls: 'stun:stun.cloudflare.com:3478' },
-            ],
-            portRange: { min: 40000, max: 40010 },
+        // Stop global black feed before starting WebRTC pipeline
+        stopGlobalBlackFeed();
+
+        // Create werift PeerConnection (receive-only)
+        // Fixed UDP port range for Docker port mapping (-p 40000-40010:40000-40010/udp)
+        // No STUN needed — browser and server on same host/network
+        // iceAdditionalHostAddresses: announce host-side IPs so browser can reach us
+        this.peerConnection = new werift.RTCPeerConnection({
+            iceServers: [],
+            icePortRange: [40000, 40010],
+            iceUseIpv4: true,
+            iceUseIpv6: false,
+            iceAdditionalHostAddresses: process.env.ICE_HOST_ADDRESS
+                ? [process.env.ICE_HOST_ADDRESS]
+                : [],
+            codecs: {
+                video: [
+                    // Prefer H.264 Constrained Baseline (most compatible)
+                    new werift.RTCRtpCodecParameters({
+                        mimeType: 'video/H264',
+                        clockRate: 90000,
+                        parameters: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f'
+                    }),
+                    // Fallback to VP8
+                    new werift.RTCRtpCodecParameters({
+                        mimeType: 'video/VP8',
+                        clockRate: 90000,
+                    }),
+                ],
+            },
         });
 
+        // Add transceiver for receiving video
         this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
 
+        // Buffer ICE candidates until answer is sent
         const pendingCandidates = [];
         let answerSent = false;
 
-        this.peerConnection.onicecandidate = (event) => {
-            if (!event.candidate) return;
+        // Handle ICE candidates — buffer until answer is sent, then send
+        this.peerConnection.onIceCandidate.subscribe((candidate) => {
+            const candidateJson = candidate.toJSON ? candidate.toJSON() : candidate;
+            const candidateStr = candidateJson && candidateJson.candidate ? candidateJson.candidate : JSON.stringify(candidateJson);
+            console.log('[camera:' + this.serial + '] Local ICE candidate: ' + candidateStr);
+
+            const allowedIp = process.env.ICE_HOST_ADDRESS || '192.168.0.113';
+            const allowed = candidateStr.includes(' typ host') && candidateStr.includes(' ' + allowedIp + ' ');
+            if (!allowed) {
+                console.log('[camera:' + this.serial + '] Drop local ICE candidate: ' + candidateStr);
+                return;
+            }
+
             if (!this.client || this.client.readyState !== WebSocket.OPEN) return;
-            const candidateMsg = JSON.stringify({
+            const msg = JSON.stringify({
                 type: 'candidate',
-                candidate: event.candidate.toJSON(),
+                candidate: candidateJson,
             });
             if (answerSent) {
-                this.client.send(candidateMsg);
+                this.client.send(msg);
             } else {
-                pendingCandidates.push(candidateMsg);
+                pendingCandidates.push(msg);
             }
-        };
+        });
+            if (answerSent) {
+                this.client.send(msg);
+            } else {
+                pendingCandidates.push(msg);
+            }
+        });
 
-        this.peerConnection.ontrack = (event) => {
-            const track = event.track;
+        // Handle incoming video track
+        // werift's onTrack.execute() passes the track directly, not an event
+        this.peerConnection.onTrack.subscribe((track) => {
             if (track.kind !== 'video') return;
 
-            console.log('[camera:' + this.serial + '] Video track received');
+            console.log('[camera:' + this.serial + '] Video track received, codec: ' + (track.codec ? track.codec.mimeType : 'unknown'));
+            this.videoCodec = track.codec ? track.codec.mimeType : 'video/H264';
             this.state = 'streaming';
 
-            this.videoSink = new RTCVideoSink(track);
+            let rtpCount = 0;
 
-            this.videoSink.onframe = ({ frame }) => {
+            // Subscribe to raw RTP packets
+            track.onReceiveRtp.subscribe((rtpPacket) => {
+                this.bytesReceived += rtpPacket.payload.length;
                 this.framesReceived++;
-                this.bytesReceived += frame.data.length;
+                rtpCount++;
 
-                // Only accept target resolution
-                if (frame.width !== CAMERA_WIDTH || frame.height !== CAMERA_HEIGHT) {
-                    this.framesDropped++;
-                    if (this.framesDropped <= 10 || this.framesDropped % 50 === 0) {
-                        console.log('[camera:' + this.serial + '] Skip ' +
-                            frame.width + 'x' + frame.height +
-                            ' (want ' + CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ')' +
-                            ' dropped=' + this.framesDropped);
-                    }
-                    return;
+                // Debug: log first few packets
+                if (rtpCount <= 5) {
+                    const nalType = rtpPacket.payload.length > 0 ? (rtpPacket.payload[0] & 0x1f) : -1;
+                    console.log('[camera:' + this.serial + '] RTP #' + rtpCount +
+                        ': payload=' + rtpPacket.payload.length + 'B' +
+                        ' nalType=' + nalType +
+                        ' marker=' + rtpPacket.header.marker +
+                        ' pt=' + rtpPacket.header.payloadType);
                 }
 
-                // Write to persistent camera writer
-                const written = writeCameraFrame(Buffer.from(frame.data.buffer));
-                if (written) {
-                    this.framesWritten++;
-                    if (this.framesWritten <= 5) {
-                        console.log('[camera:' + this.serial + '] Frame #' + this.framesWritten +
-                            ': ' + frame.width + 'x' + frame.height +
-                            ' (' + frame.data.length + 'B)' +
-                            ' dropped=' + this.framesDropped);
-                    }
-                } else {
-                    this.framesDropped++;
+                // Start FFmpeg on first RTP packet (not in onTrack)
+                if (!this.ffmpegDecoder) {
+                    this._startFFmpegDecoder();
                 }
-            };
-        };
 
-        this.peerConnection.onconnectionstatechange = () => {
-            const state = this.peerConnection ? this.peerConnection.connectionState : 'unknown';
+                this._processRtpPacket(rtpPacket);
+            });
+        });
+
+        this.peerConnection.connectionStateChange.subscribe((state) => {
             console.log('[camera:' + this.serial + '] Connection state: ' + state);
-        };
+            // Don't stop pipeline on disconnected/failed — in Docker NAT,
+            // ICE consent checks may fail but RTP data still flows.
+            // Pipeline cleanup happens when WS closes (browser disconnect).
+        });
 
-        await this.peerConnection.setRemoteDescription(
-            new RTCSessionDescription({ type: 'offer', sdp: msg.sdp })
-        );
+        // Set remote description (browser's offer)
+        const offer = new werift.RTCSessionDescription(msg.sdp, 'offer');
+        await this.peerConnection.setRemoteDescription(offer);
 
+        // Create and send answer
         const answer = await this.peerConnection.createAnswer();
         await this.peerConnection.setLocalDescription(answer);
 
@@ -1364,8 +1297,9 @@ class CameraInstance {
             answerSent = true;
             console.log('[camera:' + this.serial + '] Sent SDP answer');
 
-            for (const candidate of pendingCandidates) {
-                this.client.send(candidate);
+            // Flush any ICE candidates that were buffered while waiting
+            for (const msg of pendingCandidates) {
+                this.client.send(msg);
             }
             if (pendingCandidates.length > 0) {
                 console.log('[camera:' + this.serial + '] Flushed ' + pendingCandidates.length + ' buffered ICE candidates');
@@ -1373,19 +1307,267 @@ class CameraInstance {
         }
     }
 
-    // Only closes WebRTC. Does NOT touch the camera writer.
-    _stopPipeline() {
-        if (this.videoSink) {
-            try { this.videoSink.stop(); } catch (e) { /* ignore */ }
-            this.videoSink = null;
+    _startFFmpegDecoder() {
+        if (this.ffmpegDecoder) return;
+
+        const isH264 = this.videoCodec && this.videoCodec.toLowerCase().includes('h264');
+        const inputCodec = isH264 ? 'h264' : 'vp8';
+        const inputFormat = isH264 ? 'h264' : 'ivf';
+
+        console.log('[camera:' + this.serial + '] Starting FFmpeg decoder: ' + inputCodec + ' → v4l2 (' + this.v4l2Device + ')');
+
+        // FFmpeg: decode H.264/VP8 from stdin → YUV420P → v4l2loopback
+        // SPS+PPS arrive in first STAP-A packet, so FFmpeg should detect codec quickly
+        const ffmpegArgs = [
+            '-hide_banner',
+            '-loglevel', 'info',
+            '-stats',
+            '-fflags', '+genpts+nobuffer+flush_packets',
+            '-flags', 'low_delay',
+            '-use_wallclock_as_timestamps', '1',
+            '-probesize', '32768',
+            '-analyzeduration', '500000',
+            '-f', inputFormat,
+            '-i', 'pipe:0',
+            '-an',
+            '-vf', 'scale=' + CAMERA_WIDTH + ':' + CAMERA_HEIGHT + ':flags=fast_bilinear,format=yuv420p',
+            '-r', String(CAMERA_FPS),
+            '-pix_fmt', 'yuv420p',
+            '-vcodec', 'rawvideo',
+            '-f', 'v4l2',
+            '-video_size', CAMERA_WIDTH + 'x' + CAMERA_HEIGHT,
+            this.v4l2Device
+        ];
+
+        this.ffmpegDecoder = spawn('ffmpeg', ffmpegArgs, {
+            stdio: ['pipe', 'ignore', 'pipe']
+        });
+
+        this.ffmpegDecoder.on('spawn', () => {
+            console.log('[camera:' + this.serial + '] FFmpeg decoder started (PID ' + this.ffmpegDecoder.pid + ')');
+        });
+
+        this.ffmpegDecoder.stderr.on('data', (data) => {
+            const msg = data.toString().trim();
+            if (msg) console.log('[camera:' + this.serial + '] FFmpeg: ' + msg);
+        });
+
+        this.ffmpegDecoder.on('error', (err) => {
+            console.error('[camera:' + this.serial + '] FFmpeg error: ' + err.message);
+            this.lastError = err.message;
+        });
+
+        this.ffmpegDecoder.on('exit', (code, signal) => {
+            console.log('[camera:' + this.serial + '] FFmpeg exited: code=' + code + ' signal=' + signal);
+            this.ffmpegDecoder = null;
+        });
+    }
+
+    // Process RTP packets and write to FFmpeg
+    _processRtpPacket(rtpPacket) {
+        if (!this.ffmpegDecoder || !this.ffmpegDecoder.stdin || this.ffmpegDecoder.stdin.destroyed) return;
+
+        const isH264 = this.videoCodec && this.videoCodec.toLowerCase().includes('h264');
+
+        if (isH264) {
+            this._depacketizeH264(rtpPacket);
+        } else {
+            // VP8: simpler — each RTP packet with marker bit = end of frame
+            // For VP8, we need to strip the VP8 payload descriptor
+            // and write raw VP8 frames wrapped in IVF
+            this._depacketizeVP8(rtpPacket);
         }
+    }
+
+    // H.264 RTP depacketization (RFC 6184)
+    // Converts RTP payloads back to Annex B format (0x00000001 + NAL)
+    _depacketizeH264(rtpPacket) {
+        const payload = rtpPacket.payload;
+        if (!payload || payload.length < 1) return;
+
+        const nalHeader = payload[0];
+        const nalType = nalHeader & 0x1f;
+
+        if (nalType >= 1 && nalType <= 23) {
+            // Single NAL unit — write directly with Annex B start code
+            this._writeH264NAL(payload);
+            if (rtpPacket.header.marker) {
+                this.framesWritten++;
+            }
+        } else if (nalType === 28) {
+            // FU-A (Fragmentation Unit type A)
+            if (payload.length < 2) return;
+            const fuHeader = payload[1];
+            const isStart = (fuHeader & 0x80) !== 0;
+            const isEnd = (fuHeader & 0x40) !== 0;
+            const fuNalType = fuHeader & 0x1f;
+
+            if (isStart) {
+                // Reconstruct NAL header: F + NRI from original + type from FU header
+                const reconstructedHeader = (nalHeader & 0xe0) | fuNalType;
+                this.nalBuffer = Buffer.concat([
+                    Buffer.from([reconstructedHeader]),
+                    payload.subarray(2)
+                ]);
+                this.fuAStarted = true;
+            } else if (this.fuAStarted && this.nalBuffer) {
+                // Middle or end fragment
+                this.nalBuffer = Buffer.concat([this.nalBuffer, payload.subarray(2)]);
+
+                if (isEnd) {
+                    this._writeH264NAL(this.nalBuffer);
+                    this.nalBuffer = null;
+                    this.fuAStarted = false;
+                    if (rtpPacket.header.marker) {
+                        this.framesWritten++;
+                    }
+                }
+            }
+        } else if (nalType === 24) {
+            // STAP-A (Single-time aggregation packet)
+            let offset = 1;
+            while (offset + 2 <= payload.length) {
+                const nalSize = (payload[offset] << 8) | payload[offset + 1];
+                offset += 2;
+                if (offset + nalSize > payload.length) break;
+                const nal = payload.subarray(offset, offset + nalSize);
+                this._writeH264NAL(nal);
+                offset += nalSize;
+            }
+            if (rtpPacket.header.marker) {
+                this.framesWritten++;
+            }
+        }
+        // Other NAL types (FU-B=29, STAP-B=25, MTAP=26,27) are rare — ignore
+    }
+
+    _writeH264NAL(nal) {
+        if (!this.ffmpegDecoder || !this.ffmpegDecoder.stdin || this.ffmpegDecoder.stdin.destroyed) return;
+        // Annex B start code: 0x00000001
+        const startCode = Buffer.from([0x00, 0x00, 0x00, 0x01]);
+        if (!this._stdinBytesWritten) this._stdinBytesWritten = 0;
+        if (!this._nalWriteCount) this._nalWriteCount = 0;
+        this._nalWriteCount++;
+        const nalType = nal.length > 0 ? (nal[0] & 0x1f) : -1;
+        if (this._nalWriteCount <= 10) {
+            console.log('[camera:' + this.serial + '] Write NAL #' + this._nalWriteCount +
+                ': type=' + nalType + ' size=' + nal.length + 'B totalStdin=' + this._stdinBytesWritten + 'B');
+        }
+        try {
+            this.ffmpegDecoder.stdin.write(startCode);
+            this.ffmpegDecoder.stdin.write(nal);
+            this._stdinBytesWritten += 4 + nal.length;
+        } catch (err) {
+            console.error('[camera:' + this.serial + '] stdin write error: ' + err.message);
+        }
+    }
+
+    // VP8 RTP depacketization — extract raw VP8 frames
+    // VP8 RTP payload format: 1+ byte descriptor, then VP8 payload
+    _depacketizeVP8(rtpPacket) {
+        const payload = rtpPacket.payload;
+        if (!payload || payload.length < 1) return;
+
+        // VP8 payload descriptor parsing (RFC 7741)
+        let offset = 0;
+        const byte0 = payload[0];
+        offset++;
+        // X bit — extended
+        if (byte0 & 0x80) {
+            if (offset >= payload.length) return;
+            const extByte = payload[offset];
+            offset++;
+            // I bit — picture ID present
+            if (extByte & 0x80) {
+                if (offset >= payload.length) return;
+                if (payload[offset] & 0x80) {
+                    offset += 2; // 16-bit picture ID
+                } else {
+                    offset += 1; // 8-bit picture ID
+                }
+            }
+            // L bit — TL0PICIDX
+            if (extByte & 0x40) offset++;
+            // T or K bits — TID/KEYIDX
+            if (extByte & 0x20 || extByte & 0x10) offset++;
+        }
+
+        if (offset >= payload.length) return;
+        const vp8Data = payload.subarray(offset);
+
+        const isStart = (byte0 & 0x10) !== 0; // S bit = start of VP8 partition
+
+        if (isStart) {
+            this.nalBuffer = vp8Data;
+        } else if (this.nalBuffer) {
+            this.nalBuffer = Buffer.concat([this.nalBuffer, vp8Data]);
+        }
+
+        if (rtpPacket.header.marker && this.nalBuffer) {
+            // End of frame — write IVF frame
+            this._writeIVFFrame(this.nalBuffer);
+            this.nalBuffer = null;
+            this.framesWritten++;
+        }
+    }
+
+    _writeIVFFrame(frameData) {
+        if (!this.ffmpegDecoder || !this.ffmpegDecoder.stdin || this.ffmpegDecoder.stdin.destroyed) return;
+
+        // If this is the first frame, write IVF file header
+        if (!this._ivfHeaderWritten) {
+            const header = Buffer.alloc(32);
+            header.write('DKIF', 0);               // signature
+            header.writeUInt16LE(0, 4);              // version
+            header.writeUInt16LE(32, 6);             // header length
+            header.write('VP80', 8);                 // codec FourCC
+            header.writeUInt16LE(CAMERA_WIDTH, 12);  // width
+            header.writeUInt16LE(CAMERA_HEIGHT, 14); // height
+            header.writeUInt32LE(CAMERA_FPS, 16);    // framerate denominator
+            header.writeUInt32LE(1, 20);             // framerate numerator
+            header.writeUInt32LE(0, 24);             // frame count (unknown)
+            header.writeUInt32LE(0, 28);             // unused
+            try {
+                this.ffmpegDecoder.stdin.write(header);
+            } catch (err) { /* ignore */ }
+            this._ivfHeaderWritten = true;
+            this._ivfFrameIndex = 0;
+        }
+
+        // IVF frame header (12 bytes)
+        const frameHeader = Buffer.alloc(12);
+        frameHeader.writeUInt32LE(frameData.length, 0); // frame size
+        // timestamp (64-bit, but we use lower 32 bits)
+        frameHeader.writeUInt32LE(this._ivfFrameIndex++, 4);
+        frameHeader.writeUInt32LE(0, 8);
+
+        try {
+            this.ffmpegDecoder.stdin.write(frameHeader);
+            this.ffmpegDecoder.stdin.write(frameData);
+        } catch (err) { /* ignore */ }
+    }
+
+    _stopPipeline() {
         if (this.peerConnection) {
-            this.peerConnection.onicecandidate = null;
-            this.peerConnection.ontrack = null;
-            this.peerConnection.onconnectionstatechange = null;
             try { this.peerConnection.close(); } catch (e) { /* ignore */ }
             this.peerConnection = null;
         }
+        if (this.ffmpegDecoder) {
+            if (this.ffmpegDecoder.stdin && !this.ffmpegDecoder.stdin.destroyed) {
+                try { this.ffmpegDecoder.stdin.end(); } catch (e) { /* ignore */ }
+            }
+            try { this.ffmpegDecoder.kill('SIGTERM'); } catch (e) { /* ignore */ }
+            setTimeout(() => {
+                if (this.ffmpegDecoder) {
+                    try { this.ffmpegDecoder.kill('SIGKILL'); } catch (e) { /* ignore */ }
+                    this.ffmpegDecoder = null;
+                }
+            }, 2000);
+            this.ffmpegDecoder = null;
+        }
+        this.nalBuffer = null;
+        this.fuAStarted = false;
+        this._ivfHeaderWritten = false;
     }
 
     stop() {
@@ -1412,10 +1594,87 @@ class CameraInstance {
             framesDropped: this.framesDropped,
             startedAt: this.startedAt,
             lastError: this.lastError,
-            writerPid: cameraWriterProcess ? cameraWriterProcess.pid : null
+            videoCodec: this.videoCodec,
+            ffmpegPid: this.ffmpegDecoder ? this.ffmpegDecoder.pid : null
         };
     }
 }
+
+// ===================== Global Black Feed =====================
+// Maintains a black video feed on v4l2loopback so the emulator always sees a camera.
+// CameraInstance stops this when browser streams, restarts when browser disconnects.
+
+let globalBlackFeedProcess = null;
+
+function startGlobalBlackFeed() {
+    if (globalBlackFeedProcess) return;
+
+    // Check if v4l2 device exists
+    try {
+        require('fs').accessSync(CAMERA_V4L2_DEVICE);
+    } catch (err) {
+        console.log('[camera] v4l2 device ' + CAMERA_V4L2_DEVICE + ' not available, skipping black feed');
+        return;
+    }
+
+    console.log('[camera] Starting global black feed → ' + CAMERA_V4L2_DEVICE);
+    globalBlackFeedProcess = spawn('ffmpeg', [
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-re',
+        '-f', 'lavfi',
+        '-i', 'color=c=black:size=' + CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ':rate=' + CAMERA_FPS,
+        '-pix_fmt', 'yuv420p',
+        '-f', 'v4l2',
+        '-video_size', CAMERA_WIDTH + 'x' + CAMERA_HEIGHT,
+        CAMERA_V4L2_DEVICE
+    ], {
+        stdio: ['ignore', 'ignore', 'pipe']
+    });
+
+    globalBlackFeedProcess.stderr.on('data', (data) => {
+        const msg = data.toString().trim();
+        if (msg) console.log('[camera] Global black feed FFmpeg: ' + msg);
+    });
+
+    globalBlackFeedProcess.on('spawn', () => {
+        console.log('[camera] Global black feed started (PID ' + globalBlackFeedProcess.pid + ')');
+    });
+
+    globalBlackFeedProcess.on('exit', (code) => {
+        console.log('[camera] Global black feed exited: code=' + code);
+        globalBlackFeedProcess = null;
+        // Auto-restart after 2s unless a camera instance is streaming
+        setTimeout(() => {
+            let anyStreaming = false;
+            for (const [, inst] of cameraInstances) {
+                if (inst.state === 'streaming') { anyStreaming = true; break; }
+            }
+            if (!anyStreaming && !globalBlackFeedProcess) {
+                startGlobalBlackFeed();
+            }
+        }, 2000);
+    });
+
+    globalBlackFeedProcess.on('error', (err) => {
+        console.error('[camera] Global black feed error: ' + err.message);
+        globalBlackFeedProcess = null;
+    });
+}
+
+function stopGlobalBlackFeed() {
+    if (!globalBlackFeedProcess) return;
+    console.log('[camera] Stopping global black feed');
+    try { globalBlackFeedProcess.kill('SIGTERM'); } catch (e) { /* ignore */ }
+    setTimeout(() => {
+        if (globalBlackFeedProcess) {
+            try { globalBlackFeedProcess.kill('SIGKILL'); } catch (e) { /* ignore */ }
+            globalBlackFeedProcess = null;
+        }
+    }, 2000);
+    globalBlackFeedProcess = null;
+}
+
 // ===================== HTTP + WebSocket Server =====================
 
 const server = http.createServer((req, res) => {
@@ -1650,7 +1909,7 @@ process.on('SIGTERM', () => {
     paMonitor.stop();
     micStateMonitor.stop();
     cameraStateMonitor.stop();
-    stopCameraWriter();  
+    stopGlobalBlackFeed();
     for (const [, inst] of instances) inst.stop();
     for (const [, inst] of micInstances) inst.stop();
     for (const [, inst] of cameraInstances) inst.stop();
@@ -1660,7 +1919,7 @@ process.on('SIGINT', () => {
     paMonitor.stop();
     micStateMonitor.stop();
     cameraStateMonitor.stop();
-    stopCameraWriter();  
+    stopGlobalBlackFeed();
     for (const [, inst] of instances) inst.stop();
     for (const [, inst] of micInstances) inst.stop();
     for (const [, inst] of cameraInstances) inst.stop();

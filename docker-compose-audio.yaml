@@ -42,6 +42,7 @@ services:
             - PA_SERVER=unix:/run/pulse/shared.sock
             - OPUS_BITRATE=64000
             - MIC_PIPE_DIR=/run/pulse/mic_pipes
+            - ICE_HOST_ADDRESS=192.168.0.113
             # Auto-discovery enabled by default — no EMULATOR_MAP needed
             # when containers have hostname matching their name.
             # For custom mapping: EMULATOR_MAP=hostname:sinkIndex:serial,...
@@ -49,6 +50,7 @@ services:
             - pulse-sock:/run/pulse
         ports:
             - "7600:7600"
+            - "40000-40010:40000-40010/udp"
         depends_on:
             pulse-hub:
                 condition: service_healthy

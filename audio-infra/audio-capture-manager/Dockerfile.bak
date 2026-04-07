@@ -6,7 +6,6 @@ RUN apt-get update && \
         pulseaudio-utils \
         adb \
         curl \
-        libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -15,7 +14,6 @@ COPY package.json /app/
 RUN npm install --production
 
 COPY manager.js /app/
-COPY camera-writer.js /app/
 COPY emulator_controller.proto /app/
 COPY healthcheck.sh /app/
 RUN chmod +x /app/healthcheck.sh
