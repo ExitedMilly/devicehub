@@ -1069,12 +1069,6 @@ class MicrophoneInstance {
     }
 }
 
-// ===================== CameraInstance (WebRTC via werift) =====================
-// Receives video via WebRTC from browser.
-// WS /camera/{serial} is used as signaling channel (JSON: SDP offer/answer, ICE candidates).
-// werift RTCPeerConnection receives H.264/VP8 video track.
-// RTP packets → FFmpeg (H.264 Annex B → decode → YUV420P → v4l2loopback).
-
 const fs = require('fs');
 
 let cameraWriterProcess = null;
@@ -1186,6 +1180,56 @@ function stopGlobalBlackFeed() {
 
 
 // ===================== Camera Instance =====================
+
+function scaleYUV420(srcData, srcW, srcH, dstW, dstH) {
+    if (srcW === dstW && srcH === dstH) {
+        // No scaling needed — return as-is
+        return Buffer.from(srcData);
+    }
+
+    const dstSize = (dstW * dstH * 3) >> 1;
+    const dst = Buffer.alloc(dstSize);
+
+    // Y plane: srcW×srcH → dstW×dstH
+    const srcYEnd = srcW * srcH;
+    const dstYEnd = dstW * dstH;
+    for (let dy = 0; dy < dstH; dy++) {
+        const sy = (dy * srcH / dstH) | 0;
+        const srcRow = sy * srcW;
+        const dstRow = dy * dstW;
+        for (let dx = 0; dx < dstW; dx++) {
+            dst[dstRow + dx] = srcData[srcRow + ((dx * srcW / dstW) | 0)];
+        }
+    }
+
+    // U plane
+    const srcUW = srcW >> 1, srcUH = srcH >> 1;
+    const dstUW = dstW >> 1, dstUH = dstH >> 1;
+    const srcUOff = srcYEnd;
+    const dstUOff = dstYEnd;
+    for (let dy = 0; dy < dstUH; dy++) {
+        const sy = (dy * srcUH / dstUH) | 0;
+        const srcRow = srcUOff + sy * srcUW;
+        const dstRow = dstUOff + dy * dstUW;
+        for (let dx = 0; dx < dstUW; dx++) {
+            dst[dstRow + dx] = srcData[srcRow + ((dx * srcUW / dstUW) | 0)];
+        }
+    }
+
+    // V plane
+    const srcVOff = srcUOff + srcUW * srcUH;
+    const dstVOff = dstUOff + dstUW * dstUH;
+    for (let dy = 0; dy < dstUH; dy++) {
+        const sy = (dy * srcUH / dstUH) | 0;
+        const srcRow = srcVOff + sy * srcUW;
+        const dstRow = dstVOff + dy * dstUW;
+        for (let dx = 0; dx < dstUW; dx++) {
+            dst[dstRow + dx] = srcData[srcRow + ((dx * srcUW / dstUW) | 0)];
+        }
+    }
+
+    return dst;
+}
 
 class CameraInstance {
     constructor(serial, sinkIndex) {
@@ -1316,26 +1360,27 @@ class CameraInstance {
                 this.framesReceived++;
                 this.bytesReceived += frame.data.length;
 
-                // Only accept target resolution
-                if (frame.width !== CAMERA_WIDTH || frame.height !== CAMERA_HEIGHT) {
-                    this.framesDropped++;
-                    if (this.framesDropped <= 10 || this.framesDropped % 50 === 0) {
-                        console.log('[camera:' + this.serial + '] Skip ' +
-                            frame.width + 'x' + frame.height +
-                            ' (want ' + CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ')' +
-                            ' dropped=' + this.framesDropped);
+                // Scale to target resolution if needed (handles warm-up 320x240, 480x360)
+                let frameData;
+                if (frame.width === CAMERA_WIDTH && frame.height === CAMERA_HEIGHT) {
+                    frameData = Buffer.from(frame.data.buffer);
+                } else {
+                    frameData = scaleYUV420(frame.data, frame.width, frame.height, CAMERA_WIDTH, CAMERA_HEIGHT);
+                    if (this.framesReceived <= 5 || this.framesReceived % 50 === 0) {
+                        console.log('[camera:' + this.serial + '] Scaled ' +
+                            frame.width + 'x' + frame.height + ' → ' +
+                            CAMERA_WIDTH + 'x' + CAMERA_HEIGHT);
                     }
-                    return;
                 }
 
-                // Write to persistent camera writer
-                const written = writeCameraFrame(Buffer.from(frame.data.buffer));
+                // Write to persistent camera writer (always 640x480 now)
+                const written = writeCameraFrame(frameData);
                 if (written) {
                     this.framesWritten++;
                     if (this.framesWritten <= 5) {
                         console.log('[camera:' + this.serial + '] Frame #' + this.framesWritten +
                             ': ' + frame.width + 'x' + frame.height +
-                            ' (' + frame.data.length + 'B)' +
+                            (frame.width !== CAMERA_WIDTH ? ' (scaled)' : '') +
                             ' dropped=' + this.framesDropped);
                     }
                 } else {
