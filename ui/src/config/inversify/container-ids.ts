@@ -37,6 +37,7 @@ import type { PortForwardingService } from '@/services/port-forwarding-service/p
 import type { ApplicationInstallationService } from '@/services/application-installation/application-installation-service'
 import type { TeamSettingsService } from '@/services/team-settings-service'
 import type { TeamItemService } from '@/services/team-item-service'
+import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
 
 export const CONTAINER_IDS = {
   groupId: Symbol.for('groupId') as interfaces.ServiceIdentifier<string>,
@@ -63,6 +64,7 @@ export const CONTAINER_IDS = {
   deviceAudioStore: Symbol.for('DeviceAudioStore') as interfaces.ServiceIdentifier<DeviceAudioStore>,
   deviceMicStore: Symbol.for('DeviceMicStore') as interfaces.ServiceIdentifier<DeviceMicStore>,
   deviceCameraStore: Symbol.for('DeviceCameraStore') as interfaces.ServiceIdentifier<DeviceCameraStore>,
+  deviceMediaDevicesStore: Symbol.for('DeviceMediaDevicesStore') as interfaces.ServiceIdentifier<DeviceMediaDevicesStore>,
   accessTokenService: Symbol.for('AccessTokenService') as interfaces.ServiceIdentifier<AccessTokenService>,
   deviceControlStore: Symbol.for('DeviceControlStore') as interfaces.ServiceIdentifier<DeviceControlStore>,
   logsTrackerService: Symbol.for('LogsTrackerService') as interfaces.ServiceIdentifier<LogsTrackerService>,

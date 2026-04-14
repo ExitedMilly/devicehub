@@ -3,6 +3,7 @@ import { inject, injectable } from 'inversify'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
+import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
 
 export type EmulatorCameraState = 'active' | 'inactive' | 'unknown'
@@ -13,6 +14,7 @@ export class DeviceCameraStore {
   private signalingWs: WebSocket | null = null
   private peerConnection: RTCPeerConnection | null = null
   private mediaStream: MediaStream | null = null
+  private videoSender: RTCRtpSender | null = null
   private disposed = false
   private stateDisposed = false
   private stateWs: WebSocket | null = null
@@ -28,7 +30,8 @@ export class DeviceCameraStore {
   isStateConnected = false
 
   constructor(
-    @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore
+    @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore,
+    @inject(CONTAINER_IDS.deviceMediaDevicesStore) private mediaDevicesStore: DeviceMediaDevicesStore
   ) {
     makeAutoObservable(this)
   }
@@ -56,11 +59,7 @@ export class DeviceCameraStore {
   private connectStateWs(serial: string): void {
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     this.stateWs = new WebSocket(`${wsProto}//${window.location.host}/camera-state/${serial}`)
-
-    this.stateWs.onopen = (): void => {
-      runInAction(() => { this.isStateConnected = true })
-    }
-
+    this.stateWs.onopen = (): void => { runInAction(() => { this.isStateConnected = true }) }
     this.stateWs.onmessage = (event: MessageEvent): void => {
       try {
         const msg = JSON.parse(event.data as string)
@@ -68,24 +67,18 @@ export class DeviceCameraStore {
           const newState = msg.state as EmulatorCameraState
           runInAction(() => {
             this.emulatorCameraState = newState
-            if (newState === 'active' && this.autoStopTimer) {
-              clearTimeout(this.autoStopTimer)
-              this.autoStopTimer = null
-            }
+            if (newState === 'active' && this.autoStopTimer) { clearTimeout(this.autoStopTimer); this.autoStopTimer = null }
             if (newState === 'inactive' && this.isActive) {
               if (this.autoStopTimer) clearTimeout(this.autoStopTimer)
               this.autoStopTimer = setTimeout(() => {
                 this.autoStopTimer = null
-                if (this.isActive && this.emulatorCameraState === 'inactive') {
-                  this.stopCamera()
-                }
+                if (this.isActive && this.emulatorCameraState === 'inactive') { this.stopCamera() }
               }, 1500)
             }
           })
         }
       } catch { /* ignore */ }
     }
-
     this.stateWs.onerror = (): void => {}
     this.stateWs.onclose = (): void => {
       runInAction(() => { this.isStateConnected = false })
@@ -96,62 +89,73 @@ export class DeviceCameraStore {
     }
   }
 
-  async startCamera(): Promise<void> {
+  async startCamera(deviceId?: string): Promise<void> {
     if (this.isActive) return
     this.disposed = false
     this.errorMessage = null
     const device = await this.deviceBySerialStore.fetch()
     if (!device?.serial) return
 
+    const requestedCameraId = deviceId ?? this.mediaDevicesStore.selectedCameraId
+    const cameraId = requestedCameraId && this.mediaDevicesStore.cameras.some(device => device.deviceId === requestedCameraId)
+      ? requestedCameraId
+      : undefined
     try {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          frameRate: { ideal: 25 },
+          ...(cameraId ? { deviceId: { exact: cameraId } } : {}),
+          width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 25 },
         },
       })
+      void this.mediaDevicesStore.refreshDevices()
+      const actualId = this.mediaStream.getVideoTracks()[0]?.getSettings().deviceId
+      if (actualId) this.mediaDevicesStore.selectCamera(actualId)
+      else if (cameraId) this.mediaDevicesStore.selectCamera(cameraId)
     } catch (err) {
       runInAction(() => { this.errorMessage = 'Camera access denied' })
       return
     }
-
     if (this.disposed) { this.releaseMediaStream(); return }
 
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${wsProto}//${window.location.host}/camera/${device.serial}`
-    this.connectSignaling(wsUrl)
+    this.connectSignaling(`${wsProto}//${window.location.host}/camera/${device.serial}`)
   }
 
-  stopCamera(): void {
-    this.disposed = true
-    this.cleanup()
+  /** Select camera before start or switch camera on the fly via replaceTrack */
+  async switchCamera(deviceId: string): Promise<void> {
+    this.mediaDevicesStore.selectCamera(deviceId)
+
+    if (!this.videoSender || !this.isActive) return
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 25 } },
+      })
+      const newTrack = newStream.getVideoTracks()[0]
+      if (!newTrack) return
+      await this.videoSender.replaceTrack(newTrack)
+      if (this.mediaStream) { for (const t of this.mediaStream.getVideoTracks()) { t.stop() } }
+      this.mediaStream = newStream
+      this.mediaDevicesStore.selectCamera(deviceId)
+      console.log('[DeviceCameraStore] Switched camera to:', deviceId)
+    } catch (err) {
+      console.error('[DeviceCameraStore] Failed to switch camera:', err)
+    }
   }
+
+  stopCamera(): void { this.disposed = true; this.cleanup() }
 
   private connectSignaling(url: string): void {
     if (this.disposed) return
     this.signalingWs = new WebSocket(url)
-
     this.signalingWs.onopen = (): void => {
       if (this.disposed || !this.mediaStream) { this.cleanup(); return }
-      console.log('[DeviceCameraStore] Signaling WS connected, starting WebRTC')
       runInAction(() => { this.isConnected = true; this.isActive = true })
       this.startWebRTC()
     }
-
     this.signalingWs.onmessage = (event: MessageEvent): void => {
-      try {
-        const msg = JSON.parse(event.data as string)
-        this.handleSignalingMessage(msg)
-      } catch (err) {
-        console.error('[DeviceCameraStore] Signaling parse error:', err)
-      }
+      try { this.handleSignalingMessage(JSON.parse(event.data as string)) } catch { /* ignore */ }
     }
-
-    this.signalingWs.onerror = (): void => {
-      console.error('[DeviceCameraStore] Signaling WS error')
-    }
-
+    this.signalingWs.onerror = (): void => {}
     this.signalingWs.onclose = (): void => {
       runInAction(() => { this.isConnected = false })
       if (!this.disposed) { this.cleanup() }
@@ -160,59 +164,30 @@ export class DeviceCameraStore {
 
   private async startWebRTC(): Promise<void> {
     if (!this.mediaStream || !this.signalingWs) return
-
-    this.pendingCandidates = []
-    this.remoteDescriptionSet = false
-
-    this.peerConnection = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.cloudflare.com:3478' },
-      ],
-    })
-
+    this.pendingCandidates = []; this.remoteDescriptionSet = false
+    this.peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] })
     const videoTrack = this.mediaStream.getVideoTracks()[0]
-    if (!videoTrack) {
-      console.error('[DeviceCameraStore] No video track in mediaStream')
-      this.cleanup()
-      return
-    }
-
-    const sender = this.peerConnection.addTrack(videoTrack, this.mediaStream)
-    this.preferH264Codec(sender)
-
+    if (!videoTrack) { this.cleanup(); return }
+    this.videoSender = this.peerConnection.addTrack(videoTrack, this.mediaStream)
+    this.preferH264Codec(this.videoSender)
     this.peerConnection.onicecandidate = (event: RTCPeerConnectionIceEvent): void => {
-      const cand = event.candidate?.candidate ?? ''
-      if (!event.candidate || !cand.trim()) {
-        console.log('[DeviceCameraStore] Local ICE gathering complete')
-        return
-      }
-      console.log('[DeviceCameraStore] Local ICE candidate:', cand)
+      if (!event.candidate?.candidate?.trim()) return
       if (this.signalingWs?.readyState === WebSocket.OPEN) {
-        this.signalingWs.send(JSON.stringify({
-          type: 'candidate',
-          candidate: event.candidate.toJSON(),
-        }))
+        this.signalingWs.send(JSON.stringify({ type: 'candidate', candidate: event.candidate.toJSON() }))
       }
     }
-
     this.peerConnection.onconnectionstatechange = (): void => {
       const state = this.peerConnection?.connectionState
       console.log('[DeviceCameraStore] Connection state:', state)
-      if (state === 'failed') {
-        console.log('[DeviceCameraStore] ICE failed, auto-reconnecting...')
-        this.reconnectWebRTC()
-      }
+      if (state === 'failed') { this.reconnectWebRTC() }
     }
-
     try {
       const offer = await this.peerConnection.createOffer()
       await this.peerConnection.setLocalDescription(offer)
       if (this.signalingWs?.readyState === WebSocket.OPEN) {
         this.signalingWs.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }))
-        console.log('[DeviceCameraStore] Sent SDP offer')
       }
     } catch (err) {
-      console.error('[DeviceCameraStore] Failed to create offer:', err)
       runInAction(() => { this.errorMessage = 'WebRTC offer creation failed' })
       this.cleanup()
     }
@@ -222,97 +197,48 @@ export class DeviceCameraStore {
     if (!this.peerConnection) return
     try {
       if (msg.type === 'answer' && msg.sdp) {
-        console.log('[DeviceCameraStore] Received SDP answer')
         await this.peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }))
         this.remoteDescriptionSet = true
-        if (this.pendingCandidates.length > 0) {
-          console.log('[DeviceCameraStore] Flushing ' + this.pendingCandidates.length + ' buffered ICE candidates')
-          for (const candidate of this.pendingCandidates) {
-            await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate))
-          }
-          this.pendingCandidates = []
-        }
-      } else if (msg.type === 'candidate' && msg.candidate) {
-        const cand = msg.candidate.candidate ?? ''
-        if (!cand.trim()) { return }
-        console.log('[DeviceCameraStore] Remote ICE candidate:', cand)
-        if (this.remoteDescriptionSet) {
-          await this.peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate))
-        } else {
-          this.pendingCandidates.push(msg.candidate)
-        }
+        for (const c of this.pendingCandidates) { await this.peerConnection.addIceCandidate(new RTCIceCandidate(c)) }
+        this.pendingCandidates = []
+      } else if (msg.type === 'candidate' && msg.candidate?.candidate?.trim()) {
+        if (this.remoteDescriptionSet) { await this.peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate)) }
+        else { this.pendingCandidates.push(msg.candidate) }
       }
-    } catch (err) {
-      console.error('[DeviceCameraStore] Signaling handling error:', err)
-    }
+    } catch (err) { console.error('[DeviceCameraStore] Signaling error:', err) }
   }
 
   private preferH264Codec(sender: RTCRtpSender): void {
     if (!this.peerConnection) return
-    const transceivers = this.peerConnection.getTransceivers()
-    const videoTransceiver = transceivers.find(t => t.sender === sender)
-    if (!videoTransceiver) return
-    if (typeof videoTransceiver.setCodecPreferences !== 'function') return
+    const t = this.peerConnection.getTransceivers().find(t => t.sender === sender)
+    if (!t || typeof t.setCodecPreferences !== 'function') return
     try {
-      const capabilities = RTCRtpSender.getCapabilities?.('video')
-      if (!capabilities) return
-      const codecs = capabilities.codecs
-      const h264Codecs = codecs.filter(c => c.mimeType.toLowerCase() === 'video/h264')
-      const vp8Codecs = codecs.filter(c => c.mimeType.toLowerCase() === 'video/vp8')
-      const otherCodecs = codecs.filter(c =>
-        c.mimeType.toLowerCase() !== 'video/h264' && c.mimeType.toLowerCase() !== 'video/vp8'
-      )
-      if (h264Codecs.length > 0) {
-        videoTransceiver.setCodecPreferences([...h264Codecs, ...vp8Codecs, ...otherCodecs])
-        console.log('[DeviceCameraStore] Codec preference set: H.264 first (' + h264Codecs.length + ' profiles)')
-      }
-    } catch (err) {
-      console.warn('[DeviceCameraStore] Failed to set codec preferences:', err)
-    }
+      const caps = RTCRtpSender.getCapabilities?.('video')
+      if (!caps) return
+      const h264 = caps.codecs.filter(c => c.mimeType.toLowerCase() === 'video/h264')
+      const vp8 = caps.codecs.filter(c => c.mimeType.toLowerCase() === 'video/vp8')
+      const rest = caps.codecs.filter(c => !['video/h264', 'video/vp8'].includes(c.mimeType.toLowerCase()))
+      if (h264.length) t.setCodecPreferences([...h264, ...vp8, ...rest])
+    } catch { /* ignore */ }
   }
 
   private releaseMediaStream(): void {
-    if (this.mediaStream) {
-      for (const track of this.mediaStream.getTracks()) { track.stop() }
-      this.mediaStream = null
-    }
+    if (this.mediaStream) { for (const t of this.mediaStream.getTracks()) { t.stop() }; this.mediaStream = null }
   }
 
   private reconnectWebRTC(): void {
     if (this.disposed || !this.signalingWs || this.signalingWs.readyState !== WebSocket.OPEN) return
-    if (!this.mediaStream || this.mediaStream.getVideoTracks().length === 0) return
-
-    if (this.peerConnection) {
-      this.peerConnection.onicecandidate = null
-      this.peerConnection.onconnectionstatechange = null
-      try { this.peerConnection.close() } catch { /* ignore */ }
-      this.peerConnection = null
-    }
-    this.pendingCandidates = []
-    this.remoteDescriptionSet = false
-
-    setTimeout(() => {
-      if (this.disposed || !this.signalingWs || this.signalingWs.readyState !== WebSocket.OPEN) return
-      console.log('[DeviceCameraStore] Reconnecting WebRTC...')
-      this.startWebRTC()
-    }, 1000)
+    if (!this.mediaStream?.getVideoTracks().length) return
+    if (this.peerConnection) { try { this.peerConnection.close() } catch {} ; this.peerConnection = null }
+    this.videoSender = null; this.pendingCandidates = []; this.remoteDescriptionSet = false
+    setTimeout(() => { if (!this.disposed && this.signalingWs?.readyState === WebSocket.OPEN) this.startWebRTC() }, 1000)
   }
 
   private cleanup(): void {
-    this.pendingCandidates = []
-    this.remoteDescriptionSet = false
-    if (this.peerConnection) {
-      this.peerConnection.onicecandidate = null
-      this.peerConnection.onconnectionstatechange = null
-      try { this.peerConnection.close() } catch { /* ignore */ }
-      this.peerConnection = null
-    }
+    this.pendingCandidates = []; this.remoteDescriptionSet = false; this.videoSender = null
+    if (this.peerConnection) { try { this.peerConnection.close() } catch {}; this.peerConnection = null }
     this.releaseMediaStream()
-    if (this.signalingWs) {
-      this.signalingWs.onclose = null
-      this.signalingWs.close()
-      this.signalingWs = null
-    }
+    if (this.signalingWs) { this.signalingWs.onclose = null; this.signalingWs.close(); this.signalingWs = null }
     runInAction(() => { this.isActive = false; this.isConnected = false })
   }
 }

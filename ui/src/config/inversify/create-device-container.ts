@@ -23,6 +23,8 @@ import { DeviceAudioStore } from '@/store/device-audio-store'
 import { DeviceMicStore } from '@/store/device-mic-store'
 import { DeviceCameraStore } from '@/store/device-camera-store'
 
+import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
+
 /* NOTE:
   Creating a container for a specific device, isolating its dependencies, and ensuring that the
   `serial` value is available within the container's scope. This allows services to be resolved
@@ -51,6 +53,7 @@ export const createDeviceContainer = (serial: string): Container => {
   deviceContainer.bind(CONTAINER_IDS.deviceConnection).to(DeviceConnection)
   deviceContainer.bind(CONTAINER_IDS.shellControlStore).to(ShellControlStore)
   deviceContainer.bind(CONTAINER_IDS.deviceScreenStore).to(DeviceScreenStore)
+  deviceContainer.bind(CONTAINER_IDS.deviceMediaDevicesStore).to(DeviceMediaDevicesStore).inSingletonScope()
   deviceContainer.bind(CONTAINER_IDS.deviceAudioStore).to(DeviceAudioStore)
   deviceContainer.bind(CONTAINER_IDS.deviceMicStore).to(DeviceMicStore)
   deviceContainer.bind(CONTAINER_IDS.deviceCameraStore).to(DeviceCameraStore)
