@@ -1,0 +1,102 @@
+.wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1000;
+  width: 340px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--vkui--color_background_modal);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field + .field {
+  margin-top: 10px;
+}
+
+.label {
+  font-size: 12px;
+  color: var(--vkui--color_text_secondary);
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--vkui--color_separator_primary);
+  border-radius: 8px;
+  background: var(--vkui--color_background_content);
+  color: var(--vkui--color_text_primary);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  border-color: var(--vkui--color_stroke_accent);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.applyButton,
+.stopButton,
+.presetButton {
+  flex: 1 1 0;
+  min-width: 96px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.applyButton {
+  background: var(--vkui--color_background_accent_themed);
+  color: var(--vkui--color_text_contrast_themed);
+}
+
+.stopButton {
+  background: var(--vkui--color_background_negative);
+  color: var(--vkui--color_text_contrast_themed);
+}
+
+.presetButton {
+  background: var(--vkui--color_transparent--hover);
+  color: var(--vkui--color_text_primary);
+}
+
+.applyButton:disabled,
+.stopButton:disabled,
+.presetButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.status,
+.error {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.status {
+  color: var(--vkui--color_text_secondary);
+}
+
+.error {
+  color: var(--vkui--color_text_negative);
+}

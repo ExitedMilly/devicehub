@@ -13,6 +13,7 @@ import { ScreenQualitySelector } from '@/components/ui/screen-quality-selector'
 import { AudioToggleButton } from './audio-toggle-button'
 import { MicToggleButton } from './mic-toggle-button'
 import { CameraToggleButton } from './camera-toggle-button'
+import { GpsButton } from './gps-button'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
@@ -39,7 +40,6 @@ export const DeviceTopBar = observer(() => {
   useEffect(() => {
     const onPopState = () => {
       window.history.pushState({ modalOpened: true }, '')
-
       setIsConfirmationOpen(true)
     }
 
@@ -57,6 +57,7 @@ export const DeviceTopBar = observer(() => {
         <Icon28DevicesOutline className={styles.icon} height={25} width={25} />
         <EllipsisText>{deviceTitle}</EllipsisText>
       </Flex>
+
       <ButtonGroup align='center' gap='none' mode='horizontal'>
         <Button
           appearance='neutral'
@@ -68,6 +69,7 @@ export const DeviceTopBar = observer(() => {
           title={`${t('Portrait')} (${currentRotation})`}
           onClick={() => deviceControlStore.tryToRotate('portrait')}
         />
+
         <Button
           appearance='neutral'
           before={<Icon24VerticalRectangle9x16Outline />}
@@ -78,12 +80,16 @@ export const DeviceTopBar = observer(() => {
           title={`${t('Landscape')} (${currentRotation})`}
           onClick={() => deviceControlStore.tryToRotate('landscape')}
         />
+
         <ConditionalRender conditions={[device?.platform === 'Android']}>
           <ScreenQualitySelector />
         </ConditionalRender>
+
         <AudioToggleButton />
         <MicToggleButton />
         <CameraToggleButton />
+        <GpsButton />
+
         <Button
           appearance='neutral'
           before={<Icon24CancelOutline fill='var(--vkui--color_icon_negative)' />}
@@ -94,6 +100,7 @@ export const DeviceTopBar = observer(() => {
           onClick={() => setIsConfirmationOpen(true)}
         />
       </ButtonGroup>
+
       <WarningModal
         description={t('Are you sure? Device will be cleaned')}
         isOpen={isConfirmationOpen}

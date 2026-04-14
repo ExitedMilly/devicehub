@@ -22,6 +22,7 @@ import { DeviceScreenStore } from '@/store/device-screen-store/device-screen-sto
 import { DeviceAudioStore } from '@/store/device-audio-store'
 import { DeviceMicStore } from '@/store/device-mic-store'
 import { DeviceCameraStore } from '@/store/device-camera-store'
+import { DeviceGpsStore } from '@/store/device-gps-store'
 
 import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
 
@@ -63,6 +64,7 @@ export const createDeviceContainer = (serial: string): Container => {
   deviceContainer.bind(CONTAINER_IDS.portForwardingService).to(PortForwardingService)
   deviceContainer.bind(CONTAINER_IDS.deviceLifecycleService).to(DeviceLifecycleService)
   deviceContainer.bind(CONTAINER_IDS.applicationInstallationService).to(ApplicationInstallationService)
+  deviceContainer.bind(CONTAINER_IDS.deviceGpsStore).to(DeviceGpsStore)
 
   return deviceContainer
 }

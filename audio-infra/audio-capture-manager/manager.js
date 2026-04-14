@@ -28,6 +28,8 @@ const CAMERA_V4L2_DEVICE = process.env.CAMERA_V4L2_DEVICE || '/dev/video0';
 const CAMERA_WIDTH = parseInt(process.env.CAMERA_WIDTH || '640');
 const CAMERA_HEIGHT = parseInt(process.env.CAMERA_HEIGHT || '480');
 const CAMERA_FPS = parseInt(process.env.CAMERA_FPS || '25');
+const GPS_KEEPALIVE_INTERVAL_MS = parseInt(process.env.GPS_KEEPALIVE_INTERVAL_MS || '20000');
+
 
 // Load emulator gRPC proto
 const PROTO_PATH = path.join(__dirname, 'emulator_controller.proto');
@@ -65,6 +67,7 @@ const instances = new Map();
 const micInstances = new Map(); // serial → legacy MicrophoneInstance
 const micRtcInstances = new Map(); // serial → WebRTCMicrophoneInstance
 const cameraInstances = new Map(); // serial → CameraInstance
+const gpsSessions = new Map(); // serial -> keepalive session
 
 // ===================== Emulator Registry =====================
 // Maps container hostnames to sink indexes and serials
@@ -1941,17 +1944,294 @@ class CameraInstance {
     }
 }
 // ===================== HTTP + WebSocket Server =====================
+function readJsonBody(req) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', (chunk) => {
+            body += chunk;
+            if (body.length > 1024 * 1024) {
+                reject(new Error('Request body too large'));
+            }
+        });
+        req.on('end', () => {
+            try {
+                resolve(body ? JSON.parse(body) : {});
+            } catch (err) {
+                reject(new Error('Invalid JSON body'));
+            }
+        });
+        req.on('error', reject);
+    });
+}
+
+function runAdb(serial, args, options = {}) {
+    const { allowFailure = false, timeoutMs = 10000 } = options;
+
+    return new Promise((resolve, reject) => {
+        const child = spawn('adb', ['-s', serial, ...args], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        let stdout = '';
+        let stderr = '';
+        let settled = false;
+
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try {
+                child.kill('SIGKILL');
+            } catch {}
+            reject(new Error(`adb timeout after ${timeoutMs}ms: adb -s ${serial} ${args.join(' ')}`));
+        }, timeoutMs);
+
+        child.stdout.on('data', (chunk) => {
+            stdout += chunk.toString();
+        });
+
+        child.stderr.on('data', (chunk) => {
+            stderr += chunk.toString();
+        });
+
+        child.on('error', (err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            reject(err);
+        });
+
+        child.on('close', (code) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+
+            const result = {
+                ok: code === 0,
+                code,
+                stdout: stdout.trim(),
+                stderr: stderr.trim(),
+            };
+
+            if (code === 0 || allowFailure) {
+                resolve(result);
+                return;
+            }
+
+            reject(
+                new Error(
+                    `adb failed (code ${code}): adb -s ${serial} ${args.join(' ')}\n` +
+                    (stderr.trim() || stdout.trim() || 'no output')
+                )
+            );
+        });
+    });
+}
+
+function normalizeGpsProvider(provider) {
+    const allowed = new Set(['gps', 'fused', 'network', 'passive']);
+    if (!provider || typeof provider !== 'string') return 'gps';
+    const normalized = provider.trim().toLowerCase();
+    return allowed.has(normalized) ? normalized : 'gps';
+}
+
+function validateCoordinates(latitude, longitude) {
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+
+    if (!Number.isFinite(lat)) {
+        throw new Error('latitude must be a valid number');
+    }
+    if (!Number.isFinite(lon)) {
+        throw new Error('longitude must be a valid number');
+    }
+    if (lat < -90 || lat > 90) {
+        throw new Error('latitude must be between -90 and 90');
+    }
+    if (lon < -180 || lon > 180) {
+        throw new Error('longitude must be between -180 and 180');
+    }
+
+    return { lat, lon };
+}
+
+async function setMockGpsLocation(serial, latitude, longitude, provider = 'gps') {
+    const { lat, lon } = validateCoordinates(latitude, longitude);
+    const normalizedProvider = normalizeGpsProvider(provider);
+
+    console.log(
+        `[gps] Applying mock location to ${serial}: provider=${normalizedProvider}, lat=${lat}, lon=${lon}`
+    );
+
+    await runAdb(serial, ['shell', 'cmd', 'location', 'set-location-enabled', 'true']);
+    await runAdb(serial, ['shell', 'appops', 'set', '2000', 'android:mock_location', 'allow']);
+
+    const addProviderResult = await runAdb(
+        serial,
+        ['shell', 'cmd', 'location', 'providers', 'add-test-provider', normalizedProvider],
+        { allowFailure: true }
+    );
+
+    if (
+        !addProviderResult.ok &&
+        !/already exists|already added|Duplicate/i.test(
+            `${addProviderResult.stderr}\n${addProviderResult.stdout}`
+        )
+    ) {
+        throw new Error(
+            `failed to add test provider "${normalizedProvider}": ` +
+            (addProviderResult.stderr || addProviderResult.stdout || 'unknown error')
+        );
+    }
+
+    await runAdb(serial, [
+        'shell',
+        'cmd',
+        'location',
+        'providers',
+        'set-test-provider-enabled',
+        normalizedProvider,
+        'true',
+    ]);
+
+    // IMPORTANT: cmd location expects LATITUDE,LONGITUDE
+    await runAdb(serial, [
+        'shell',
+        'cmd',
+        'location',
+        'providers',
+        'set-test-provider-location',
+        normalizedProvider,
+        '--location',
+        `${lat},${lon}`,
+    ]);
+
+    return {
+        serial,
+        provider: normalizedProvider,
+        latitude: lat,
+        longitude: lon,
+    };
+}
+
+function stopGpsKeepAlive(serial) {
+    const session = gpsSessions.get(serial);
+    if (!session) return false;
+
+    if (session.timer) {
+        clearInterval(session.timer);
+        session.timer = null;
+    }
+
+    gpsSessions.delete(serial);
+    console.log('[gps] Keepalive stopped for ' + serial);
+    return true;
+}
+
+function getGpsSessionsStatus() {
+    const result = {};
+    for (const [serial, session] of gpsSessions) {
+        result[serial] = {
+            serial: session.serial,
+            provider: session.provider,
+            latitude: session.latitude,
+            longitude: session.longitude,
+            intervalMs: session.intervalMs,
+            startedAt: session.startedAt,
+            lastAppliedAt: session.lastAppliedAt,
+            lastError: session.lastError,
+            running: session.running,
+        };
+    }
+    return result;
+}
+
+async function startGpsKeepAlive(serial, latitude, longitude, provider = 'gps', intervalMs = GPS_KEEPALIVE_INTERVAL_MS) {
+    const { lat, lon } = validateCoordinates(latitude, longitude);
+    const normalizedProvider = normalizeGpsProvider(provider);
+    const normalizedIntervalMs = Number.isFinite(Number(intervalMs)) && Number(intervalMs) >= 5000
+        ? Number(intervalMs)
+        : GPS_KEEPALIVE_INTERVAL_MS;
+
+    stopGpsKeepAlive(serial);
+
+    await setMockGpsLocation(serial, lat, lon, normalizedProvider);
+
+    const session = {
+        serial,
+        provider: normalizedProvider,
+        latitude: lat,
+        longitude: lon,
+        intervalMs: normalizedIntervalMs,
+        timer: null,
+        running: false,
+        startedAt: new Date().toISOString(),
+        lastAppliedAt: new Date().toISOString(),
+        lastError: null,
+    };
+
+    session.timer = setInterval(async () => {
+        if (session.running) return;
+
+        session.running = true;
+        try {
+            await setMockGpsLocation(serial, session.latitude, session.longitude, session.provider);
+            session.lastAppliedAt = new Date().toISOString();
+            session.lastError = null;
+            console.log(
+                '[gps] Keepalive refresh for ' + serial +
+                ': ' + session.latitude + ',' + session.longitude +
+                ' provider=' + session.provider
+            );
+        } catch (err) {
+            session.lastError = err.message;
+            console.error('[gps] Keepalive refresh failed for ' + serial + ': ' + err.message);
+        } finally {
+            session.running = false;
+        }
+    }, session.intervalMs);
+
+    gpsSessions.set(serial, session);
+
+    console.log(
+        '[gps] Keepalive started for ' + serial +
+        ': provider=' + normalizedProvider +
+        ', lat=' + lat +
+        ', lon=' + lon +
+        ', interval=' + normalizedIntervalMs + 'ms'
+    );
+
+    return {
+        serial,
+        provider: normalizedProvider,
+        latitude: lat,
+        longitude: lon,
+        keepAlive: true,
+        intervalMs: normalizedIntervalMs,
+        startedAt: session.startedAt,
+    };
+}
 
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
-    res.setHeader('Content-Type', 'application/json');
 
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204)
+        res.end()
+        return
+    }
+   
     if (req.method === 'GET' && url.pathname === '/api/health') {
         res.writeHead(200);
         res.end(JSON.stringify({
             status: 'ok',
             instances: instances.size,
             micInstances: micInstances.size,
+            gpsSessions: gpsSessions.size,
             autoDiscovery: AUTO_DISCOVER,
             knownQemuInputs: paMonitor.knownSinkInputs.size
         }));
@@ -1976,6 +2256,14 @@ const server = http.createServer((req, res) => {
         }
         res.writeHead(200);
         res.end(JSON.stringify({ capture: status, mic: micStatus, micStates: micStates, camera: cameraStatus, cameraStates: cameraStates }, null, 2));
+        return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/gps/status') {
+        res.writeHead(200);
+        res.end(JSON.stringify({
+            ok: true,
+            sessions: getGpsSessionsStatus(),
+        }, null, 2));
         return;
     }
 
@@ -2021,6 +2309,71 @@ const server = http.createServer((req, res) => {
                 res.end(JSON.stringify({ status: 'stopped', serial }));
             } catch (err) { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); }
         });
+        return;
+    }
+
+    const gpsStopMatch = url.pathname.match(/^\/api\/gps\/(.+)\/stop$/);
+    if (req.method === 'POST' && gpsStopMatch) {
+        const serial = decodeURIComponent(gpsStopMatch[1]);
+        const stopped = stopGpsKeepAlive(serial);
+
+        res.writeHead(200);
+        res.end(JSON.stringify({
+            ok: true,
+            serial,
+            stopped,
+        }));
+        return;
+    }
+
+    const gpsMatch = url.pathname.match(/^\/api\/gps\/(.+)$/);
+    if (req.method === 'POST' && gpsMatch) {
+        const serial = decodeURIComponent(gpsMatch[1]);
+
+        readJsonBody(req)
+            .then(async (body) => {
+                const keepAlive = !!body.keepAlive;
+                const intervalMs = body.intervalMs || GPS_KEEPALIVE_INTERVAL_MS;
+
+                let result;
+                if (keepAlive) {
+                    result = await startGpsKeepAlive(
+                        serial,
+                        body.latitude,
+                        body.longitude,
+                        body.provider || 'gps',
+                        intervalMs
+                    );
+                } else {
+                    stopGpsKeepAlive(serial);
+                    const onceResult = await setMockGpsLocation(
+                        serial,
+                        body.latitude,
+                        body.longitude,
+                        body.provider || 'gps'
+                    );
+                    result = {
+                        ...onceResult,
+                        keepAlive: false,
+                        intervalMs: null,
+                    };
+                }
+
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                    ok: true,
+                    ...result,
+                }));
+            })
+            .catch((err) => {
+                console.error('[gps] Failed to apply GPS:', err.message);
+                res.writeHead(400);
+                res.end(JSON.stringify({
+                    ok: false,
+                    error: err.message,
+                }));
+            });
+
         return;
     }
 
@@ -2189,6 +2542,8 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     console.log('[audio-capture-manager] Camera State: ws://0.0.0.0:' + MANAGER_PORT + '/camera-state/{serial}');
     console.log('[audio-capture-manager] MIC_PIPE_DIR=' + MIC_PIPE_DIR);
     console.log('[audio-capture-manager] CAMERA_V4L2_DEVICE=' + CAMERA_V4L2_DEVICE);
+    console.log('[audio-capture-manager] GPS API: http://0.0.0.0:' + MANAGER_PORT + '/api/gps/{serial}');
+    console.log('[audio-capture-manager] GPS keepalive interval=' + GPS_KEEPALIVE_INTERVAL_MS + 'ms');
 
     // Start PA auto-discovery
     paMonitor.start();
@@ -2210,6 +2565,9 @@ process.on('SIGTERM', () => {
     for (const [, inst] of micInstances) inst.stop();
     for (const [, inst] of micRtcInstances) inst.stop();
     for (const [, inst] of cameraInstances) inst.stop();
+    for (const serial of Array.from(gpsSessions.keys())) {
+        stopGpsKeepAlive(serial);
+    }
     server.close(() => process.exit(0));
 });
 process.on('SIGINT', () => {
@@ -2221,5 +2579,8 @@ process.on('SIGINT', () => {
     for (const [, inst] of micInstances) inst.stop();
     for (const [, inst] of micRtcInstances) inst.stop();
     for (const [, inst] of cameraInstances) inst.stop();
+    for (const serial of Array.from(gpsSessions.keys())) {
+        stopGpsKeepAlive(serial);
+    }
     server.close(() => process.exit(0));
 });
