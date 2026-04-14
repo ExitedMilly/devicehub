@@ -23,6 +23,7 @@ import { DeviceAudioStore } from '@/store/device-audio-store'
 import { DeviceMicStore } from '@/store/device-mic-store'
 import { DeviceCameraStore } from '@/store/device-camera-store'
 import { DeviceGpsStore } from '@/store/device-gps-store'
+import { DevicePoseStore } from '@/store/device-pose-store'
 
 import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
 
@@ -65,6 +66,7 @@ export const createDeviceContainer = (serial: string): Container => {
   deviceContainer.bind(CONTAINER_IDS.deviceLifecycleService).to(DeviceLifecycleService)
   deviceContainer.bind(CONTAINER_IDS.applicationInstallationService).to(ApplicationInstallationService)
   deviceContainer.bind(CONTAINER_IDS.deviceGpsStore).to(DeviceGpsStore)
+  deviceContainer.bind(CONTAINER_IDS.devicePoseStore).to(DevicePoseStore)
 
   return deviceContainer
 }

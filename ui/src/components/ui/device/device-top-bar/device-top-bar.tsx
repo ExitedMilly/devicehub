@@ -14,6 +14,7 @@ import { AudioToggleButton } from './audio-toggle-button'
 import { MicToggleButton } from './mic-toggle-button'
 import { CameraToggleButton } from './camera-toggle-button'
 import { GpsButton } from './gps-button'
+import { PoseButton } from './pose-button'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
@@ -89,6 +90,7 @@ export const DeviceTopBar = observer(() => {
         <MicToggleButton />
         <CameraToggleButton />
         <GpsButton />
+        <PoseButton />
 
         <Button
           appearance='neutral'

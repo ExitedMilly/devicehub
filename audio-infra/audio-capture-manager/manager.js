@@ -68,6 +68,7 @@ const micInstances = new Map(); // serial → legacy MicrophoneInstance
 const micRtcInstances = new Map(); // serial → WebRTCMicrophoneInstance
 const cameraInstances = new Map(); // serial → CameraInstance
 const gpsSessions = new Map(); // serial -> keepalive session
+const poseStates = new Map(); // serial -> last applied pose
 
 // ===================== Emulator Registry =====================
 // Maps container hostnames to sink indexes and serials
@@ -2211,6 +2212,118 @@ async function startGpsKeepAlive(serial, latitude, longitude, provider = 'gps', 
     };
 }
 
+function getGrpcAddressFromSerial(serial) {
+    const hostname = serial.split(':')[0];
+    return hostname + ':' + GRPC_PORT;
+}
+
+function callUnaryGrpc(client, method, payload) {
+    return new Promise((resolve, reject) => {
+        client[method](payload, (err, res) => {
+            if (err) {
+                reject(err);
+                return;
+            }
+            resolve(res);
+        });
+    });
+}
+
+function validatePoseAngles(pitch, yaw, roll) {
+    const p = Number(pitch);
+    const y = Number(yaw);
+    const r = Number(roll);
+
+    if (!Number.isFinite(p)) {
+        throw new Error('pitch must be a valid number');
+    }
+    if (!Number.isFinite(y)) {
+        throw new Error('yaw must be a valid number');
+    }
+    if (!Number.isFinite(r)) {
+        throw new Error('roll must be a valid number');
+    }
+
+    if (p < -180 || p > 180) {
+        throw new Error('pitch must be between -180 and 180');
+    }
+    if (y < -180 || y > 180) {
+        throw new Error('yaw must be between -180 and 180');
+    }
+    if (r < -180 || r > 180) {
+        throw new Error('roll must be between -180 and 180');
+    }
+
+    return { pitch: p, yaw: y, roll: r };
+}
+
+function getPoseStatesStatus() {
+    const result = {};
+    for (const [serial, pose] of poseStates) {
+        result[serial] = pose;
+    }
+    return result;
+}
+
+async function setDevicePoseRotation(serial, pitch, yaw, roll) {
+    if (!emulatorProto) {
+        throw new Error('gRPC proto not loaded');
+    }
+
+    const normalized = validatePoseAngles(pitch, yaw, roll);
+    const grpcAddress = getGrpcAddressFromSerial(serial);
+
+    console.log(
+        '[pose] Applying rotation to ' + serial +
+        ': pitch=' + normalized.pitch +
+        ', yaw=' + normalized.yaw +
+        ', roll=' + normalized.roll +
+        ' via ' + grpcAddress
+    );
+
+    const grpcClient = new emulatorProto.EmulatorController(
+        grpcAddress,
+        grpc.credentials.createInsecure()
+    );
+
+    await callUnaryGrpc(grpcClient, 'setPhysicalModel', {
+        target: 'ROTATION',
+        value: {
+            data: [normalized.pitch, normalized.yaw, normalized.roll],
+        },
+    });
+
+    // Small delay so readback is more reliable
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const rotationState = await callUnaryGrpc(grpcClient, 'getPhysicalModel', {
+        target: 'ROTATION',
+    });
+
+    const accelerationState = await callUnaryGrpc(grpcClient, 'getSensor', {
+        target: 'ACCELERATION',
+    });
+
+    const orientationState = await callUnaryGrpc(grpcClient, 'getSensor', {
+        target: 'ORIENTATION',
+    });
+
+    const result = {
+        serial,
+        pitch: normalized.pitch,
+        yaw: normalized.yaw,
+        roll: normalized.roll,
+        appliedAt: new Date().toISOString(),
+        rotation: rotationState && rotationState.value ? rotationState.value.data : null,
+        acceleration: accelerationState && accelerationState.value ? accelerationState.value.data : null,
+        orientation: orientationState && orientationState.value ? orientationState.value.data : null,
+    };
+
+    poseStates.set(serial, result);
+
+    return result;
+}
+
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
 
@@ -2232,6 +2345,7 @@ const server = http.createServer((req, res) => {
             instances: instances.size,
             micInstances: micInstances.size,
             gpsSessions: gpsSessions.size,
+            poseStates: poseStates.size,
             autoDiscovery: AUTO_DISCOVER,
             knownQemuInputs: paMonitor.knownSinkInputs.size
         }));
@@ -2263,6 +2377,14 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({
             ok: true,
             sessions: getGpsSessionsStatus(),
+        }, null, 2));
+        return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/pose/status') {
+        res.writeHead(200);
+        res.end(JSON.stringify({
+            ok: true,
+            poses: getPoseStatesStatus(),
         }, null, 2));
         return;
     }
@@ -2326,7 +2448,7 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    const gpsMatch = url.pathname.match(/^\/api\/gps\/(.+)$/);
+        const gpsMatch = url.pathname.match(/^\/api\/gps\/(.+)$/);
     if (req.method === 'POST' && gpsMatch) {
         const serial = decodeURIComponent(gpsMatch[1]);
 
@@ -2367,6 +2489,37 @@ const server = http.createServer((req, res) => {
             })
             .catch((err) => {
                 console.error('[gps] Failed to apply GPS:', err.message);
+                res.writeHead(400);
+                res.end(JSON.stringify({
+                    ok: false,
+                    error: err.message,
+                }));
+            });
+
+        return;
+    }
+
+    const poseMatch = url.pathname.match(/^\/api\/pose\/(.+)$/);
+    if (req.method === 'POST' && poseMatch) {
+        const serial = decodeURIComponent(poseMatch[1]);
+
+        readJsonBody(req)
+            .then(async (body) => {
+                const result = await setDevicePoseRotation(
+                    serial,
+                    body.pitch,
+                    body.yaw,
+                    body.roll
+                );
+
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                    ok: true,
+                    ...result,
+                }));
+            })
+            .catch((err) => {
+                console.error('[pose] Failed to apply pose:', err.message);
                 res.writeHead(400);
                 res.end(JSON.stringify({
                     ok: false,
@@ -2544,6 +2697,7 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     console.log('[audio-capture-manager] CAMERA_V4L2_DEVICE=' + CAMERA_V4L2_DEVICE);
     console.log('[audio-capture-manager] GPS API: http://0.0.0.0:' + MANAGER_PORT + '/api/gps/{serial}');
     console.log('[audio-capture-manager] GPS keepalive interval=' + GPS_KEEPALIVE_INTERVAL_MS + 'ms');
+    console.log('[audio-capture-manager] Pose API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}');
 
     // Start PA auto-discovery
     paMonitor.start();
