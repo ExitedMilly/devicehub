@@ -92,7 +92,6 @@ export class DeviceMediaDevicesStore {
       const cameras = this.uniqueByDeviceId(
         devices
           .filter(d => d.kind === 'videoinput')
-          .filter(d => !this.isHiddenCameraLabel(d.label))
           .map(d => ({
             deviceId: d.deviceId,
             label: d.label || `Camera ${d.deviceId.slice(0, 4) || 'unknown'}`,
@@ -269,9 +268,6 @@ export class DeviceMediaDevicesStore {
     return result
   }
 
-  private isHiddenCameraLabel(label: string): boolean {
-    return /^dummy video device/i.test(label.trim())
-  }
 
   private readStoredSelection(key: string): string | null {
     try {
