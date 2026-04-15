@@ -40,6 +40,7 @@ import type { TeamItemService } from '@/services/team-item-service'
 import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
 import { DeviceGpsStore } from '@/store/device-gps-store'
 import { DevicePoseStore } from '@/store/device-pose-store'
+import { DeviceLightStore } from '@/store/device-light-store'
 
 export const CONTAINER_IDS = {
   groupId: Symbol.for('groupId') as interfaces.ServiceIdentifier<string>,
@@ -83,6 +84,7 @@ export const CONTAINER_IDS = {
   deviceLifecycleService: Symbol.for('DeviceLifecycleService') as interfaces.ServiceIdentifier<DeviceLifecycleService>,
   deviceGpsStore: Symbol.for('DeviceGpsStore') as interfaces.ServiceIdentifier<DeviceGpsStore>,
   devicePoseStore: Symbol.for('DevicePoseStore') as interfaces.ServiceIdentifier<DevicePoseStore>,
+  deviceLightStore: Symbol.for('DeviceLightStore') as interfaces.ServiceIdentifier<DeviceLightStore>,
   factoryTransactionService: Symbol.for(
     'Factory<TransactionService>'
   ) as interfaces.ServiceIdentifier<TransactionFactory>,

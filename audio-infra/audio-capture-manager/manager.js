@@ -71,6 +71,7 @@ const micRtcInstances = new Map(); // serial → WebRTCMicrophoneInstance
 const cameraInstances = new Map(); // serial → CameraInstance
 const gpsSessions = new Map(); // serial -> keepalive session
 const poseStates = new Map(); // serial -> last applied pose
+const lightStates = new Map(); // serial -> last applied light state
 
 // ===================== Emulator Registry =====================
 // Maps container hostnames to sink indexes and serials
@@ -1786,19 +1787,19 @@ class CameraInstance {
     }
 
     async _handleSignaling(msg) {
-        try {
-            if (msg.type === 'offer') {
-                await this._handleOffer(msg);
-            } else if (msg.type === 'candidate' && msg.candidate) {
-                if (this.peerConnection) {
-                    await this.peerConnection.addIceCandidate(msg.candidate);
-                }
+    try {
+        if (msg.type === 'offer') {
+            await this._handleOffer(msg);
+        } else if (msg.type === 'candidate' && msg.candidate) {
+            if (this.peerConnection) {
+                await this.peerConnection.addIceCandidate(msg.candidate);
             }
-        } catch (err) {
-            console.error('[camera:' + this.serial + '] Signaling error: ' + err.message);
-            this.lastError = err.message;
         }
+    } catch (err) {
+        console.error('[camera:' + this.serial + '] Signaling error: ' + err.message);
+        this.lastError = err.message;
     }
+}
 
     async _handleOffer(msg) {
         console.log('[camera:' + this.serial + '] Received SDP offer');
@@ -2280,6 +2281,149 @@ function getPoseStatesStatus() {
     return result;
 }
 
+function validateLightLux(lux) {
+    const value = Number(lux);
+
+    if (!Number.isFinite(value)) {
+        throw new Error('lux must be a valid number');
+    }
+    if (value < 0) {
+        throw new Error('lux must be greater than or equal to 0');
+    }
+
+    return value;
+}
+
+function getLightStatesStatus() {
+    const result = {};
+    for (const [serial, light] of lightStates) {
+        result[serial] = light;
+    }
+    return result;
+}
+
+function extractGrpcNumericValue(response) {
+    if (!response || !response.value || !Array.isArray(response.value.data) || response.value.data.length === 0) {
+        return null;
+    }
+
+    const value = Number(response.value.data[0]);
+    return Number.isFinite(value) ? value : null;
+}
+
+function parseAdbLightGetOutput(stdout) {
+    const match = String(stdout || '').match(/light\s*=\s*(-?\d+(?:\.\d+)?)/i);
+    if (!match) return null;
+
+    const value = Number(match[1]);
+    return Number.isFinite(value) ? value : null;
+}
+
+async function getAdbLightValue(serial) {
+    const result = await runAdb(serial, ['emu', 'sensor', 'get', 'light']);
+    return parseAdbLightGetOutput(result.stdout);
+}
+
+async function setDeviceLightViaAdb(serial, lux) {
+    const normalizedLux = validateLightLux(lux);
+
+    await runAdb(serial, ['emu', 'sensor', 'set', 'light', String(normalizedLux)]);
+    const sensorLux = await getAdbLightValue(serial);
+
+    return {
+        appliedVia: 'adbConsole',
+        physicalLux: null,
+        sensorLux: sensorLux,
+    };
+}
+
+async function setDeviceLightViaGrpcPhysicalModel(serial, lux) {
+    if (!emulatorProto) {
+        throw new Error('gRPC proto not loaded');
+    }
+
+    const normalizedLux = validateLightLux(lux);
+    const grpcAddress = getGrpcAddressFromSerial(serial);
+
+    const grpcClient = new emulatorProto.EmulatorController(
+        grpcAddress,
+        grpc.credentials.createInsecure()
+    );
+
+    await callUnaryGrpc(grpcClient, 'setPhysicalModel', {
+        target: 'LIGHT',
+        value: {
+            data: [normalizedLux],
+        },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const physicalState = await callUnaryGrpc(grpcClient, 'getPhysicalModel', {
+        target: 'LIGHT',
+    });
+
+    const sensorState = await callUnaryGrpc(grpcClient, 'getSensor', {
+        target: 'LIGHT',
+    });
+
+    return {
+        appliedVia: 'physicalModel',
+        physicalLux: extractGrpcNumericValue(physicalState),
+        sensorLux: extractGrpcNumericValue(sensorState),
+    };
+}
+
+async function setDeviceLight(serial, lux) {
+    const normalizedLux = validateLightLux(lux);
+
+    console.log('[light] Applying ambient light to ' + serial + ': lux=' + normalizedLux);
+
+    let appliedVia = null;
+    let physicalLux = null;
+    let sensorLux = null;
+    let fallbackReason = null;
+
+    try {
+        const grpcResult = await setDeviceLightViaGrpcPhysicalModel(serial, normalizedLux);
+        appliedVia = grpcResult.appliedVia;
+        physicalLux = grpcResult.physicalLux;
+        sensorLux = grpcResult.sensorLux;
+
+        const hasAcceptableReadback = [physicalLux, sensorLux].some((value) =>
+            value !== null && Math.abs(value - normalizedLux) <= 0.01
+        );
+
+        if (!hasAcceptableReadback) {
+            throw new Error(
+                'gRPC light readback mismatch: physical=' +
+                String(physicalLux) + ', sensor=' + String(sensorLux)
+            );
+        }
+    } catch (err) {
+        fallbackReason = err.message;
+        console.warn('[light] gRPC path failed for ' + serial + ', falling back to adb emu: ' + err.message);
+
+        const adbResult = await setDeviceLightViaAdb(serial, normalizedLux);
+        appliedVia = adbResult.appliedVia;
+        physicalLux = adbResult.physicalLux;
+        sensorLux = adbResult.sensorLux;
+    }
+
+    const result = {
+        serial: serial,
+        lux: normalizedLux,
+        appliedAt: new Date().toISOString(),
+        appliedVia: appliedVia,
+        physicalLux: physicalLux,
+        sensorLux: sensorLux,
+        fallbackReason: fallbackReason,
+    };
+
+    lightStates.set(serial, result);
+    return result;
+}
+
 async function setDevicePoseRotation(serial, pitch, yaw, roll) {
     if (!emulatorProto) {
         throw new Error('gRPC proto not loaded');
@@ -2361,6 +2505,7 @@ const server = http.createServer((req, res) => {
             micInstances: micInstances.size,
             gpsSessions: gpsSessions.size,
             poseStates: poseStates.size,
+            lightStates: lightStates.size,
             autoDiscovery: AUTO_DISCOVER,
             knownQemuInputs: paMonitor.knownSinkInputs.size
         }));
@@ -2403,6 +2548,16 @@ const server = http.createServer((req, res) => {
         }, null, 2));
         return;
     }
+
+    if (req.method === 'GET' && url.pathname === '/api/light/status') {
+    res.writeHead(200);
+    res.end(JSON.stringify({
+        ok: true,
+        lights: getLightStatesStatus(),
+    }, null, 2));
+    return;
+}
+    
 
     // Manual start (still available, but auto-discovery handles it normally)
     if (req.method === 'POST' && url.pathname === '/api/capture/start') {
@@ -2686,6 +2841,32 @@ if (req.method === 'POST' && poseScStopMatch) {
         return;
     }
 
+    const lightMatch = url.pathname.match(/^\/api\/light\/(.+)$/);
+    if (req.method === 'POST' && lightMatch) {
+    const serial = decodeURIComponent(lightMatch[1]);
+
+    readJsonBody(req)
+        .then(async (body) => {
+            const result = await setDeviceLight(serial, body.lux);
+
+            res.writeHead(200);
+            res.end(JSON.stringify({
+                ok: true,
+                ...result,
+            }));
+        })
+        .catch((err) => {
+            console.error('[light] Failed to apply light:', err.message);
+            res.writeHead(400);
+            res.end(JSON.stringify({
+                ok: false,
+                error: err.message,
+            }));
+        });
+
+    return;
+    }
+
     res.writeHead(404);
     res.end(JSON.stringify({ error: 'not found' }));
 });
@@ -2854,6 +3035,7 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     console.log('[audio-capture-manager] GPS API: http://0.0.0.0:' + MANAGER_PORT + '/api/gps/{serial}');
     console.log('[audio-capture-manager] GPS keepalive interval=' + GPS_KEEPALIVE_INTERVAL_MS + 'ms');
     console.log('[audio-capture-manager] Pose API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}');
+    console.log('[audio-capture-manager] Light API: http://0.0.0.0:' + MANAGER_PORT + '/api/light/{serial}');
     console.log('[audio-capture-manager] Walk API: http://0.0.0.0:' + MANAGER_PORT + '/api/walk/{serial}/(start|pause|resume|stop|status)');
     console.log('[audio-capture-manager] Pose Scenario API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}/scenario/(start|pause|resume|stop|status)');
     console.log('[audio-capture-manager] Pose Scenario tick=' + poseScenario.TICK_HZ + ' Hz');
