@@ -9,6 +9,7 @@ const protoLoader = require('@grpc/proto-loader');
 // WebRTC for camera input
 const { RTCPeerConnection, RTCSessionDescription } = require('@roamhq/wrtc');
 const { RTCVideoSink, RTCAudioSink } = require('@roamhq/wrtc').nonstandard;
+const walkSimulator = require('./walk-simulator');
 
 const MANAGER_PORT = parseInt(process.env.MANAGER_PORT || '7600');
 const PA_SERVER = process.env.PA_SERVER || 'unix:/run/pulse/shared.sock';
@@ -2212,6 +2213,12 @@ async function startGpsKeepAlive(serial, latitude, longitude, provider = 'gps', 
     };
 }
 
+walkSimulator.init({
+setMockGpsLocation,
+startGpsKeepAlive,
+stopGpsKeepAlive,
+});
+
 function getGrpcAddressFromSerial(serial) {
     const hostname = serial.split(':')[0];
     return hostname + ':' + GRPC_PORT;
@@ -2437,6 +2444,7 @@ const server = http.createServer((req, res) => {
     const gpsStopMatch = url.pathname.match(/^\/api\/gps\/(.+)\/stop$/);
     if (req.method === 'POST' && gpsStopMatch) {
         const serial = decodeURIComponent(gpsStopMatch[1]);
+        walkSimulator.stopWalk(serial);
         const stopped = stopGpsKeepAlive(serial);
 
         res.writeHead(200);
@@ -2451,6 +2459,7 @@ const server = http.createServer((req, res) => {
         const gpsMatch = url.pathname.match(/^\/api\/gps\/(.+)$/);
     if (req.method === 'POST' && gpsMatch) {
         const serial = decodeURIComponent(gpsMatch[1]);
+        walkSimulator.stopWalk(serial);
 
         readJsonBody(req)
             .then(async (body) => {
@@ -2498,6 +2507,70 @@ const server = http.createServer((req, res) => {
 
         return;
     }
+
+    // ----------------- WALK SIMULATION -----------------
+
+if (req.method === 'GET' && url.pathname === '/api/walk/status') {
+    res.writeHead(200);
+    res.end(JSON.stringify({
+        ok: true,
+        sessions: walkSimulator.getAllStatuses(),
+    }));
+    return;
+}
+
+const walkStatusOneMatch = url.pathname.match(/^\/api\/walk\/(.+)\/status$/);
+if (req.method === 'GET' && walkStatusOneMatch) {
+    const serial = decodeURIComponent(walkStatusOneMatch[1]);
+    const status = walkSimulator.getStatus(serial);
+    res.writeHead(200);
+    res.end(JSON.stringify({ ok: true, serial, status }));
+    return;
+}
+
+const walkStartMatch = url.pathname.match(/^\/api\/walk\/(.+)\/start$/);
+if (req.method === 'POST' && walkStartMatch) {
+    const serial = decodeURIComponent(walkStartMatch[1]);
+    readJsonBody(req)
+        .then(async (body) => {
+            const status = await walkSimulator.startWalk(serial, body || {});
+            res.writeHead(200);
+            res.end(JSON.stringify({ ok: true, serial, status }));
+        })
+        .catch((err) => {
+            console.error('[walk] start failed:', err.message);
+            res.writeHead(400);
+            res.end(JSON.stringify({ ok: false, error: err.message }));
+        });
+    return;
+}
+
+const walkPauseMatch = url.pathname.match(/^\/api\/walk\/(.+)\/pause$/);
+if (req.method === 'POST' && walkPauseMatch) {
+    const serial = decodeURIComponent(walkPauseMatch[1]);
+    const ok = walkSimulator.pauseWalk(serial);
+    res.writeHead(200);
+    res.end(JSON.stringify({ ok: true, serial, paused: ok, status: walkSimulator.getStatus(serial) }));
+    return;
+}
+
+const walkResumeMatch = url.pathname.match(/^\/api\/walk\/(.+)\/resume$/);
+if (req.method === 'POST' && walkResumeMatch) {
+    const serial = decodeURIComponent(walkResumeMatch[1]);
+    const ok = walkSimulator.resumeWalk(serial);
+    res.writeHead(200);
+    res.end(JSON.stringify({ ok: true, serial, resumed: ok, status: walkSimulator.getStatus(serial) }));
+    return;
+}
+
+const walkStopMatch = url.pathname.match(/^\/api\/walk\/(.+)\/stop$/);
+if (req.method === 'POST' && walkStopMatch) {
+    const serial = decodeURIComponent(walkStopMatch[1]);
+    const stopped = walkSimulator.stopWalk(serial);
+    res.writeHead(200);
+    res.end(JSON.stringify({ ok: true, serial, stopped }));
+    return;
+}
 
     const poseMatch = url.pathname.match(/^\/api\/pose\/(.+)$/);
     if (req.method === 'POST' && poseMatch) {
@@ -2698,6 +2771,7 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     console.log('[audio-capture-manager] GPS API: http://0.0.0.0:' + MANAGER_PORT + '/api/gps/{serial}');
     console.log('[audio-capture-manager] GPS keepalive interval=' + GPS_KEEPALIVE_INTERVAL_MS + 'ms');
     console.log('[audio-capture-manager] Pose API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}');
+    console.log('[audio-capture-manager] Walk API: http://0.0.0.0:' + MANAGER_PORT + '/api/walk/{serial}/(start|pause|resume|stop|status)');
 
     // Start PA auto-discovery
     paMonitor.start();
@@ -2722,6 +2796,7 @@ process.on('SIGTERM', () => {
     for (const serial of Array.from(gpsSessions.keys())) {
         stopGpsKeepAlive(serial);
     }
+    walkSimulator.shutdown();
     server.close(() => process.exit(0));
 });
 process.on('SIGINT', () => {
@@ -2736,5 +2811,6 @@ process.on('SIGINT', () => {
     for (const serial of Array.from(gpsSessions.keys())) {
         stopGpsKeepAlive(serial);
     }
+    walkSimulator.shutdown();
     server.close(() => process.exit(0));
 });

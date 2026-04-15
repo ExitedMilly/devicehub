@@ -8,6 +8,22 @@ import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import topBarStyles from './device-top-bar.module.css'
 import styles from './gps-button.module.css'
 
+import type { WalkSpeedPreset, WalkProfile } from '@/store/device-gps-store'
+
+const SPEED_OPTIONS: Array<{ value: WalkSpeedPreset; label: string }> = [
+  { value: 'walking', label: 'Walking (5 km/h)' },
+  { value: 'jogging', label: 'Jogging (9 km/h)' },
+  { value: 'running', label: 'Running (14 km/h)' },
+  { value: 'cycling', label: 'Cycling (20 km/h)' },
+  { value: 'driving', label: 'Driving (50 km/h)' },
+]
+
+const PROFILE_OPTIONS: Array<{ value: WalkProfile; label: string }> = [
+  { value: 'foot', label: 'Foot' },
+  { value: 'bike', label: 'Bike' },
+  { value: 'driving', label: 'Car' },
+]
+
 export const GpsButton = observer(() => {
   const gpsStore = useInjection(CONTAINER_IDS.deviceGpsStore)
   const [isOpen, setIsOpen] = useState(false)
@@ -44,6 +60,9 @@ export const GpsButton = observer(() => {
 
       {isOpen && (
         <div className={styles.dropdown}>
+
+          {/* ============== Point GPS section ============== */}
+
           <div className={styles.field}>
             <label className={styles.label} htmlFor='gps-latitude'>Latitude</label>
             <input
@@ -102,6 +121,157 @@ export const GpsButton = observer(() => {
           {gpsStore.statusText && (
             <div className={gpsStore.errorMessage ? styles.error : styles.status}>
               {gpsStore.statusText}
+            </div>
+          )}
+
+          <hr className={styles.divider} />
+
+          {/* ============== Walk simulation section ============== */}
+
+          <div className={styles.sectionTitle}>Walk simulation</div>
+
+          <div className={styles.row}>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor='walk-from-lat'>From lat</label>
+              <input
+                className={styles.input}
+                id='walk-from-lat'
+                placeholder='52.520008'
+                type='text'
+                value={gpsStore.walkFromLat}
+                onChange={(e) => gpsStore.setWalkFromLat(e.target.value)}
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor='walk-from-lon'>From lon</label>
+              <input
+                className={styles.input}
+                id='walk-from-lon'
+                placeholder='13.404954'
+                type='text'
+                value={gpsStore.walkFromLon}
+                onChange={(e) => gpsStore.setWalkFromLon(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className={styles.row}>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor='walk-to-lat'>To lat</label>
+              <input
+                className={styles.input}
+                id='walk-to-lat'
+                placeholder='52.516275'
+                type='text'
+                value={gpsStore.walkToLat}
+                onChange={(e) => gpsStore.setWalkToLat(e.target.value)}
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor='walk-to-lon'>To lon</label>
+              <input
+                className={styles.input}
+                id='walk-to-lon'
+                placeholder='13.377704'
+                type='text'
+                value={gpsStore.walkToLon}
+                onChange={(e) => gpsStore.setWalkToLon(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className={styles.row}>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor='walk-speed'>Speed</label>
+              <select
+                className={styles.input}
+                id='walk-speed'
+                value={gpsStore.walkSpeed}
+                onChange={(e) => gpsStore.setWalkSpeed(e.target.value as WalkSpeedPreset)}
+              >
+                {SPEED_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor='walk-profile'>Routing</label>
+              <select
+                className={styles.input}
+                id='walk-profile'
+                value={gpsStore.walkProfile}
+                onChange={(e) => gpsStore.setWalkProfile(e.target.value as WalkProfile)}
+              >
+                {PROFILE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className={styles.actions}>
+            {!gpsStore.isWalkActive && (
+              <button
+                className={styles.applyButton}
+                disabled={!gpsStore.isWalkInputValid || gpsStore.walkIsStarting}
+                type='button'
+                onClick={() => { void gpsStore.startWalk() }}
+              >
+                {gpsStore.walkIsStarting ? 'Building route...' : 'Start walk'}
+              </button>
+            )}
+
+            {gpsStore.walkBackend?.status === 'running' && (
+              <button
+                className={styles.presetButton}
+                disabled={gpsStore.walkIsControlling}
+                type='button'
+                onClick={() => { void gpsStore.pauseWalk() }}
+              >
+                Pause
+              </button>
+            )}
+
+            {gpsStore.walkBackend?.status === 'paused' && (
+              <button
+                className={styles.applyButton}
+                disabled={gpsStore.walkIsControlling}
+                type='button'
+                onClick={() => { void gpsStore.resumeWalk() }}
+              >
+                Resume
+              </button>
+            )}
+
+            {gpsStore.isWalkActive && (
+              <button
+                className={styles.stopButton}
+                disabled={gpsStore.walkIsControlling}
+                type='button'
+                onClick={() => { void gpsStore.stopWalk() }}
+              >
+                Stop walk
+              </button>
+            )}
+
+            <button
+              className={styles.presetButton}
+              type='button'
+              title='Brandenburger Tor → Potsdamer Platz'
+              onClick={() => {
+                gpsStore.setWalkFromLat('52.516275')
+                gpsStore.setWalkFromLon('13.377704')
+                gpsStore.setWalkToLat('52.509663')
+                gpsStore.setWalkToLon('13.376217')
+              }}
+            >
+              Berlin demo
+            </button>
+          </div>
+
+          {gpsStore.walkStatusText && (
+            <div className={gpsStore.walkErrorMessage ? styles.error : styles.status}>
+              {gpsStore.walkStatusText}
             </div>
           )}
         </div>

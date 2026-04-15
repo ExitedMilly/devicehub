@@ -9,21 +9,35 @@
   top: calc(100% + 6px);
   right: 0;
   z-index: 1000;
-  width: 340px;
+  width: 380px;
   padding: 12px;
   border-radius: 12px;
   background: var(--vkui--color_background_modal);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .field + .field {
   margin-top: 10px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.row .field + .field {
+  margin-top: 0;
 }
 
 .label {
@@ -91,6 +105,7 @@
   margin-top: 10px;
   font-size: 12px;
   line-height: 1.4;
+  word-break: break-word;
 }
 
 .status {
@@ -99,4 +114,17 @@
 
 .error {
   color: var(--vkui--color_text_negative);
+}
+
+.divider {
+  margin: 16px 0 12px 0;
+  border: none;
+  border-top: 1px solid var(--vkui--color_separator_primary);
+}
+
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vkui--color_text_primary);
+  margin-bottom: 8px;
 }
