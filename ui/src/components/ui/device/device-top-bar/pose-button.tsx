@@ -8,6 +8,14 @@ import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import topBarStyles from './device-top-bar.module.css'
 import styles from './pose-button.module.css'
 
+import type { PoseScenarioName } from '@/store/device-pose-store'
+
+const SCENARIO_OPTIONS: Array<{ value: PoseScenarioName; label: string }> = [
+  { value: 'walking', label: 'Walking (in pocket)' },
+  { value: 'cycling', label: 'Cycling (jacket pocket)' },
+  { value: 'driving', label: 'Driving (dashboard mount)' },
+]
+
 export const PoseButton = observer(() => {
   const poseStore = useInjection(CONTAINER_IDS.devicePoseStore)
   const [isOpen, setIsOpen] = useState(false)
@@ -44,6 +52,9 @@ export const PoseButton = observer(() => {
 
       {isOpen && (
         <div className={styles.dropdown}>
+
+          {/* ============== Single-shot pose section ============== */}
+
           <div className={styles.field}>
             <label className={styles.label} htmlFor='pose-pitch'>Pitch</label>
             <input
@@ -112,6 +123,79 @@ export const PoseButton = observer(() => {
           {poseStore.statusText && (
             <div className={poseStore.errorMessage ? styles.error : styles.status}>
               {poseStore.statusText}
+            </div>
+          )}
+
+          <hr className={styles.divider} />
+
+          {/* ============== Scenario section ============== */}
+
+          <div className={styles.sectionTitle}>Motion scenario</div>
+
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor='pose-scenario'>Scenario</label>
+            <select
+              className={styles.input}
+              id='pose-scenario'
+              value={poseStore.scenarioName}
+              onChange={(e) => poseStore.setScenarioName(e.target.value as PoseScenarioName)}
+              disabled={poseStore.isScenarioActive}
+            >
+              {SCENARIO_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className={styles.actions}>
+            {!poseStore.isScenarioActive && (
+              <button
+                className={styles.applyButton}
+                disabled={poseStore.scenarioIsStarting}
+                type='button'
+                onClick={() => { void poseStore.startScenario() }}
+              >
+                {poseStore.scenarioIsStarting ? 'Starting...' : 'Start scenario'}
+              </button>
+            )}
+
+            {poseStore.scenarioBackend?.status === 'running' && (
+              <button
+                className={styles.presetButton}
+                disabled={poseStore.scenarioIsControlling}
+                type='button'
+                onClick={() => { void poseStore.pauseScenario() }}
+              >
+                Pause
+              </button>
+            )}
+
+            {poseStore.scenarioBackend?.status === 'paused' && (
+              <button
+                className={styles.applyButton}
+                disabled={poseStore.scenarioIsControlling}
+                type='button'
+                onClick={() => { void poseStore.resumeScenario() }}
+              >
+                Resume
+              </button>
+            )}
+
+            {poseStore.isScenarioActive && (
+              <button
+                className={styles.stopButton}
+                disabled={poseStore.scenarioIsControlling}
+                type='button'
+                onClick={() => { void poseStore.stopScenario() }}
+              >
+                Stop
+              </button>
+            )}
+          </div>
+
+          {poseStore.scenarioStatusText && (
+            <div className={poseStore.scenarioErrorMessage ? styles.error : styles.status}>
+              {poseStore.scenarioStatusText}
             </div>
           )}
         </div>

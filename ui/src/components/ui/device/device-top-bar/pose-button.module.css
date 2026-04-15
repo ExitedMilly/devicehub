@@ -14,6 +14,8 @@
   border-radius: 12px;
   background: var(--vkui--color_background_modal);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
 .field {
@@ -46,23 +48,47 @@
   border-color: var(--vkui--color_stroke_accent);
 }
 
+.input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .actions {
   display: flex;
   gap: 8px;
   margin-top: 12px;
+  flex-wrap: wrap;
 }
 
-.applyButton {
-  flex: 1;
+.applyButton,
+.stopButton,
+.presetButton {
+  flex: 1 1 0;
+  min-width: 96px;
   padding: 10px 12px;
   border: none;
   border-radius: 8px;
   cursor: pointer;
+}
+
+.applyButton {
   background: var(--vkui--color_background_accent_themed);
   color: var(--vkui--color_text_contrast_themed);
 }
 
-.applyButton:disabled {
+.stopButton {
+  background: var(--vkui--color_background_negative);
+  color: var(--vkui--color_text_contrast_themed);
+}
+
+.presetButton {
+  background: var(--vkui--color_transparent--hover);
+  color: var(--vkui--color_text_primary);
+}
+
+.applyButton:disabled,
+.stopButton:disabled,
+.presetButton:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -74,15 +100,10 @@
   margin-top: 12px;
 }
 
-.presetButton {
+.presets .presetButton {
   flex: 1 1 calc(50% - 4px);
   min-width: 120px;
   padding: 9px 10px;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  background: var(--vkui--color_transparent--hover);
-  color: var(--vkui--color_text_primary);
 }
 
 .status,
@@ -99,4 +120,17 @@
 
 .error {
   color: var(--vkui--color_text_negative);
+}
+
+.divider {
+  margin: 16px 0 12px 0;
+  border: none;
+  border-top: 1px solid var(--vkui--color_separator_primary);
+}
+
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vkui--color_text_primary);
+  margin-bottom: 8px;
 }

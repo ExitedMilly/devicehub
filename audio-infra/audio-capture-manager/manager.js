@@ -10,6 +10,7 @@ const protoLoader = require('@grpc/proto-loader');
 const { RTCPeerConnection, RTCSessionDescription } = require('@roamhq/wrtc');
 const { RTCVideoSink, RTCAudioSink } = require('@roamhq/wrtc').nonstandard;
 const walkSimulator = require('./walk-simulator');
+const poseScenario = require('./pose-scenario');
 
 const MANAGER_PORT = parseInt(process.env.MANAGER_PORT || '7600');
 const PA_SERVER = process.env.PA_SERVER || 'unix:/run/pulse/shared.sock';
@@ -2219,6 +2220,13 @@ startGpsKeepAlive,
 stopGpsKeepAlive,
 });
 
+poseScenario.init({
+emulatorProto: emulatorProto,
+callUnaryGrpc: callUnaryGrpc,
+getGrpcAddressFromSerial: getGrpcAddressFromSerial,
+setDevicePoseRotation: setDevicePoseRotation,
+});
+
 function getGrpcAddressFromSerial(serial) {
     const hostname = serial.split(':')[0];
     return hostname + ':' + GRPC_PORT;
@@ -2572,9 +2580,84 @@ if (req.method === 'POST' && walkStopMatch) {
     return;
 }
 
+// ----------------- POSE SCENARIO -----------------
+
+if (req.method === 'GET' && url.pathname === '/api/pose/scenario/list') {
+    res.writeHead(200);
+    res.end(JSON.stringify({
+        ok: true,
+        scenarios: poseScenario.listScenarios(),
+        tickHz: poseScenario.TICK_HZ,
+    }));
+    return;
+}
+
+if (req.method === 'GET' && url.pathname === '/api/pose/scenario/status') {
+    res.writeHead(200);
+    res.end(JSON.stringify({
+        ok: true,
+        sessions: poseScenario.getAllStatuses(),
+    }));
+    return;
+}
+
+const poseScStatusOneMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/status$/);
+if (req.method === 'GET' && poseScStatusOneMatch) {
+    const serial = decodeURIComponent(poseScStatusOneMatch[1]);
+    const status = poseScenario.getStatus(serial);
+    res.writeHead(200);
+    res.end(JSON.stringify({ ok: true, serial: serial, status: status }));
+    return;
+}
+
+const poseScStartMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/start$/);
+if (req.method === 'POST' && poseScStartMatch) {
+    const serial = decodeURIComponent(poseScStartMatch[1]);
+    readJsonBody(req)
+        .then(async (body) => {
+            const status = await poseScenario.startScenario(serial, body || {});
+            res.writeHead(200);
+            res.end(JSON.stringify({ ok: true, serial: serial, status: status }));
+        })
+        .catch((err) => {
+            console.error('[pose-scenario] start failed:', err.message);
+            res.writeHead(400);
+            res.end(JSON.stringify({ ok: false, error: err.message }));
+        });
+    return;
+}
+
+const poseScPauseMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/pause$/);
+if (req.method === 'POST' && poseScPauseMatch) {
+    const serial = decodeURIComponent(poseScPauseMatch[1]);
+    const ok = poseScenario.pauseScenario(serial);
+    res.writeHead(200);
+    res.end(JSON.stringify({ ok: true, serial: serial, paused: ok, status: poseScenario.getStatus(serial) }));
+    return;
+}
+
+const poseScResumeMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/resume$/);
+if (req.method === 'POST' && poseScResumeMatch) {
+    const serial = decodeURIComponent(poseScResumeMatch[1]);
+    const ok = poseScenario.resumeScenario(serial);
+    res.writeHead(200);
+    res.end(JSON.stringify({ ok: true, serial: serial, resumed: ok, status: poseScenario.getStatus(serial) }));
+    return;
+}
+
+const poseScStopMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/stop$/);
+if (req.method === 'POST' && poseScStopMatch) {
+    const serial = decodeURIComponent(poseScStopMatch[1]);
+    const stopped = poseScenario.stopScenario(serial);
+    res.writeHead(200);
+    res.end(JSON.stringify({ ok: true, serial: serial, stopped: stopped }));
+    return;
+}
+
     const poseMatch = url.pathname.match(/^\/api\/pose\/(.+)$/);
     if (req.method === 'POST' && poseMatch) {
         const serial = decodeURIComponent(poseMatch[1]);
+        poseScenario.stopScenario(serial);
 
         readJsonBody(req)
             .then(async (body) => {
@@ -2772,6 +2855,8 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     console.log('[audio-capture-manager] GPS keepalive interval=' + GPS_KEEPALIVE_INTERVAL_MS + 'ms');
     console.log('[audio-capture-manager] Pose API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}');
     console.log('[audio-capture-manager] Walk API: http://0.0.0.0:' + MANAGER_PORT + '/api/walk/{serial}/(start|pause|resume|stop|status)');
+    console.log('[audio-capture-manager] Pose Scenario API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}/scenario/(start|pause|resume|stop|status)');
+    console.log('[audio-capture-manager] Pose Scenario tick=' + poseScenario.TICK_HZ + ' Hz');
 
     // Start PA auto-discovery
     paMonitor.start();
@@ -2797,6 +2882,7 @@ process.on('SIGTERM', () => {
         stopGpsKeepAlive(serial);
     }
     walkSimulator.shutdown();
+    poseScenario.shutdown();
     server.close(() => process.exit(0));
 });
 process.on('SIGINT', () => {
@@ -2812,5 +2898,6 @@ process.on('SIGINT', () => {
         stopGpsKeepAlive(serial);
     }
     walkSimulator.shutdown();
+    poseScenario.shutdown();
     server.close(() => process.exit(0));
 });

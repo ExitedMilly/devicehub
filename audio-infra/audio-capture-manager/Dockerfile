@@ -19,6 +19,7 @@ COPY camera-writer.js /app/
 COPY emulator_controller.proto /app/
 COPY healthcheck.sh /app/
 COPY walk-simulator.js /app/
+COPY pose-scenario.js /app/
 RUN chmod +x /app/healthcheck.sh
 
 RUN useradd -m -s /bin/bash capture
