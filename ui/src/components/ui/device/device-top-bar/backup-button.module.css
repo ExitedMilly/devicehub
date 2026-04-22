@@ -1,0 +1,86 @@
+.wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1000;
+  width: 340px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--vkui--color_background_modal);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vkui--color_text_primary);
+  margin-bottom: 8px;
+}
+
+.hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--vkui--color_text_secondary);
+  margin-bottom: 12px;
+}
+
+.hint code {
+  font-family: monospace;
+  background: var(--vkui--color_transparent--hover);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.applyButton,
+.restoreButton {
+  flex: 1;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.applyButton {
+  background: var(--vkui--color_background_accent_themed);
+  color: var(--vkui--color_text_contrast_themed);
+}
+
+.restoreButton {
+  background: var(--vkui--color_background_secondary);
+  color: var(--vkui--color_text_primary);
+  border: 1px solid var(--vkui--color_separator_primary);
+}
+
+.applyButton:disabled,
+.restoreButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.status,
+.error {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.status {
+  color: var(--vkui--color_text_secondary);
+}
+
+.error {
+  color: var(--vkui--color_text_negative);
+}

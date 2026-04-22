@@ -11,6 +11,7 @@ const { RTCPeerConnection, RTCSessionDescription } = require('@roamhq/wrtc');
 const { RTCVideoSink, RTCAudioSink } = require('@roamhq/wrtc').nonstandard;
 const walkSimulator = require('./walk-simulator');
 const poseScenario = require('./pose-scenario');
+const backupLogical = require('./backup-logical');
 
 const MANAGER_PORT = parseInt(process.env.MANAGER_PORT || '7600');
 const PA_SERVER = process.env.PA_SERVER || 'unix:/run/pulse/shared.sock';
@@ -21,6 +22,7 @@ const SAMPLE_RATE = 48000;
 const CHANNELS = 1;
 const FRAME_DURATION_MS = 20;
 const MAX_RESPAWN_DELAY_MS = 30000;
+
 
 // Mic state polling interval (how often we check if Android is listening)
 const MIC_STATE_POLL_MS = parseInt(process.env.MIC_STATE_POLL_MS || '1500');
@@ -2031,6 +2033,9 @@ function runAdb(serial, args, options = {}) {
     });
 }
 
+
+
+
 function normalizeGpsProvider(provider) {
     const allowed = new Set(['gps', 'fused', 'network', 'passive']);
     if (!provider || typeof provider !== 'string') return 'gps';
@@ -2756,6 +2761,57 @@ if (req.method === 'GET' && url.pathname === '/api/pose/scenario/status') {
     return;
 }
 
+    // ----------------- BACKUP (AVD snapshot) -----------------
+
+    const backupRestoreMatch = url.pathname.match(/^\/api\/backup\/(.+)\/restore$/);
+    if (req.method === 'POST' && backupRestoreMatch) {
+        const serial = decodeURIComponent(backupRestoreMatch[1]);
+        backupLogical.restoreBackup(serial)
+            .then(function(report) {
+                res.writeHead(200);
+                res.end(JSON.stringify({ ok: true, report: report }));
+            })
+            .catch(function(err) {
+                console.error('[restore] Failed for ' + serial + ': ' + err.message);
+                res.writeHead(500);
+                res.end(JSON.stringify({ ok: false, error: err.message }));
+            });
+        return;
+    }
+
+    const backupStatusMatch = url.pathname.match(/^\/api\/backup\/(.+)\/status$/);
+    if (req.method === 'GET' && backupStatusMatch) {
+        const serial = decodeURIComponent(backupStatusMatch[1]);
+        try {
+            const status = backupLogical.getBackupStatus(serial);
+            res.writeHead(200);
+            res.end(JSON.stringify({ ok: true, serial: serial, status: status }));
+        } catch (err) {
+            res.writeHead(500);
+            res.end(JSON.stringify({ ok: false, error: err.message }));
+        }
+        return;
+    }
+
+    
+
+    const backupCreateMatch = url.pathname.match(/^\/api\/backup\/(.+)$/);
+    if (req.method === 'POST' && backupCreateMatch) {
+        const serial = decodeURIComponent(backupCreateMatch[1]);
+        backupLogical.createBackup(serial)
+            .then(function(result) {
+                res.writeHead(200);
+                res.end(JSON.stringify({ ok: true, result: result }));
+            })
+            .catch(function(err) {
+                console.error('[backup] Failed for ' + serial + ': ' + err.message);
+                res.writeHead(500);
+                res.end(JSON.stringify({ ok: false, error: err.message }));
+            });
+        return;
+    }
+
+
 const poseScStatusOneMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/status$/);
 if (req.method === 'GET' && poseScStatusOneMatch) {
     const serial = decodeURIComponent(poseScStatusOneMatch[1]);
@@ -3039,7 +3095,8 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     console.log('[audio-capture-manager] Walk API: http://0.0.0.0:' + MANAGER_PORT + '/api/walk/{serial}/(start|pause|resume|stop|status)');
     console.log('[audio-capture-manager] Pose Scenario API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}/scenario/(start|pause|resume|stop|status)');
     console.log('[audio-capture-manager] Pose Scenario tick=' + poseScenario.TICK_HZ + ' Hz');
-
+    console.log('[audio-capture-manager] Backup API: http://0.0.0.0:' + MANAGER_PORT + '/api/backup/{serial} (POST create, GET /status) — dir: ' + backupLogical.BACKUP_DIR);
+    console.log('[audio-capture-manager] Backup: logical (APK + /sdcard/), dir=' + (process.env.BACKUP_DIR || '/backups') + ' — POST /api/backup/{serial}, POST /api/backup/{serial}/restore, GET /api/backup/{serial}/status');
     // Start PA auto-discovery
     paMonitor.start();
     // Start mic state monitoring

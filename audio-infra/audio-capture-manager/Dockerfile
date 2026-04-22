@@ -7,6 +7,7 @@ RUN apt-get update && \
         adb \
         curl \
         libatomic1 \
+	tar \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,6 +21,7 @@ COPY emulator_controller.proto /app/
 COPY healthcheck.sh /app/
 COPY walk-simulator.js /app/
 COPY pose-scenario.js /app/
+COPY backup-logical.js /app/
 RUN chmod +x /app/healthcheck.sh
 
 RUN useradd -m -s /bin/bash capture
