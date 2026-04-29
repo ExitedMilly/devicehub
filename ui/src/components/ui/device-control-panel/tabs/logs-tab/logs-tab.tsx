@@ -24,9 +24,22 @@ export const LogsTab = observer(() => {
     <Card className={styles.logsTab} mode='tint'>
       <Div>
         <Flex align='center' justify='space-between' noWrap>
+          <Flex align='center' gap='m' noWrap>
+            <Button
+              disabled={logcatService.isLogsEmpty}
+              mode='tertiary'
+              size='m'
+              onClick={() => logcatService.clearLogs()}
+            >
+              {t('Clear')}
+            </Button>
+            <Button disabled={logcatService.isLogsEmpty} mode='secondary' size='m' onClick={() => setIsModalOpen(true)}>
+              {t('Export')}
+            </Button>
+          </Flex>
           <Input
             className={styles.search}
-            placeholder={t('Search')}
+            placeholder={t('Search logs...')}
             value={logsTableState.globalFilter}
             onChange={(event) => logsTableState.setGlobalFilter(event.target.value)}
           />
@@ -43,27 +56,10 @@ export const LogsTab = observer(() => {
               </Button>
             </ConditionalRender>
             <ConditionalRender conditions={[logcatService.isLogcatStarted]}>
-              <Button
-                appearance='negative'
-                mode='primary'
-                size='m'
-                stretched
-                onClick={() => logcatService.stopLogcat()}
-              >
+              <Button appearance='negative' mode='primary' size='m' stretched onClick={() => logcatService.stopLogcat()}>
                 {t('Stop')}
               </Button>
             </ConditionalRender>
-            <Button disabled={logcatService.isLogsEmpty} mode='secondary' size='m' onClick={() => setIsModalOpen(true)}>
-              {t('Export')}
-            </Button>
-            <Button
-              disabled={logcatService.isLogsEmpty}
-              mode='secondary'
-              size='m'
-              onClick={() => logcatService.clearLogs()}
-            >
-              {t('Clear')}
-            </Button>
           </Flex>
         </Flex>
       </Div>

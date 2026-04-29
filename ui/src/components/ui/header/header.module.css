@@ -12,32 +12,72 @@
 
   background: var(--vkui--color_background_content);
   border-bottom: 1px solid var(--vkui--color_image_border_alpha);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 8%);
 }
 
 .leftSide {
   display: flex;
   align-items: center;
   height: 100%;
-  padding-left: 28px;
+  padding-left: 0;
 }
 
 .logoLink {
-  margin-right: 25px;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 20px 0 24px;
+  margin-right: 4px;
+  background: var(--header-logo-bg);
+  border-right: 1px solid var(--header-divider);
+  text-decoration: none;
 }
 
 .logo {
-  margin-right: 10px;
+  display: block;
+}
+
+.navGroup {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
 }
 
 .navLink + .navLink {
-  margin-left: 2px;
+  margin-left: 0;
+}
+
+.navLink {
+  text-decoration: none;
+}
+
+.supportDivider {
+  width: 1px;
+  height: 20px;
+  margin: 0 8px;
+  background: var(--header-divider);
+  flex-shrink: 0;
+}
+
+.supportBtn {
+  opacity: 0.65;
+  transition: opacity 0.15s ease;
+}
+
+.supportBtn:hover {
+  opacity: 1;
 }
 
 .rightSide {
   display: flex;
-  gap: 5px;
+  gap: 6px;
   align-items: center;
 
   height: 100%;
-  padding-right: 28px;
+  padding-right: 20px;
+}
+
+.logoutBtn {
+  margin-left: 4px;
 }

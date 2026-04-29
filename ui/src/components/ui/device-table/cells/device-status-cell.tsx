@@ -34,7 +34,7 @@ export const DeviceStatusCell = memo(({ serial, channel, deviceState }: DeviceSt
     <>
       <ConditionalRender conditions={[deviceState === DeviceState.AVAILABLE]}>
         <Link to={getControlRoute(serial)}>
-          <Button mode='outline' title={deviceState}>
+          <Button appearance='accent' mode='primary' title={deviceState}>
             {t('Use')}
           </Button>
         </Link>

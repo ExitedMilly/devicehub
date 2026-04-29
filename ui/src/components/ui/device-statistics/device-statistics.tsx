@@ -19,6 +19,7 @@ export const DeviceStatistics = observer(() => {
   return (
     <Flex align='center' justify='space-between'>
       <StatisticCard
+        accentColor='var(--accent-blue)'
         className={styles.deviceStatistics}
         color='var(--vkui--color_accent_azure)'
         icon={StatisticCardIcon.DEVICES_OUTLINE}
@@ -26,6 +27,7 @@ export const DeviceStatistics = observer(() => {
         value={deviceListStore.totalNumberDevices}
       />
       <StatisticCard
+        accentColor='var(--accent-green)'
         appearance='accent-green'
         className={styles.deviceStatistics}
         icon={StatisticCardIcon.CHECK_CIRCLE_DEVICE_OUTLINE}
@@ -33,6 +35,7 @@ export const DeviceStatistics = observer(() => {
         value={deviceListStore.usableDevicesCount}
       />
       <StatisticCard
+        accentColor='var(--accent-violet)'
         className={styles.deviceStatistics}
         color='var(--vkui--color_accent_violet)'
         icon={StatisticCardIcon.USERS_OUTLINE}
@@ -40,6 +43,7 @@ export const DeviceStatistics = observer(() => {
         value={deviceListStore.busyDevicesCount}
       />
       <StatisticCard
+        accentColor='var(--accent-teal)'
         appearance='neutral'
         className={styles.deviceStatistics}
         icon={StatisticCardIcon.USER_CIRCLE_OUTLINE}

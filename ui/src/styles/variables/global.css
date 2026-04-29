@@ -12,5 +12,23 @@
   --slider-mark-background: #e2e3e6;
   --finger-background: #7c7c7c;
   --finger-border-color: #464646;
-  --info-block-color: rgb(0 119 255 / 20%);
+  --info-block-color: rgb(0 119 255 / 15%);
+
+  /* Design tokens */
+  --card-radius: 12px;
+  --card-shadow: 0 2px 10px rgb(0 0 0 / 7%);
+  --card-shadow-hover: 0 6px 20px rgb(0 0 0 / 13%);
+  --card-transition: box-shadow 0.18s ease, transform 0.18s ease;
+
+  /* Accent palette */
+  --accent-blue: #0077ff;
+  --accent-green: #12c25b;
+  --accent-violet: #7b4ff0;
+  --accent-orange: #ff7700;
+  --accent-red: #e64646;
+  --accent-teal: #00b8d4;
+
+  /* Header */
+  --header-logo-bg: rgb(0 119 255 / 5%);
+  --header-divider: rgb(0 0 0 / 8%);
 }

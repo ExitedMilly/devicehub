@@ -1,9 +1,28 @@
 .statisticCard {
   flex: 1;
+  position: relative;
 
   min-width: 165px;
-  height: 50px;
+  height: 64px;
   margin: 10px 0;
 
+  overflow: hidden;
   background: var(--vkui--color_background_content);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+  transition: var(--card-transition);
+}
+
+.statisticCard::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--stat-accent, var(--accent-blue));
+  border-radius: var(--card-radius) 0 0 var(--card-radius);
+}
+
+.statisticCard:hover {
+  box-shadow: var(--card-shadow-hover);
+  transform: translateY(-2px);
 }

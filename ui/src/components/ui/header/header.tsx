@@ -3,7 +3,6 @@ import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { Button, Tappable } from '@vkontakte/vkui'
 import {
-  Icon16MailOutline,
   Icon16HelpOutline,
   Icon28DevicesOutline,
   Icon28SettingsOutline,
@@ -17,7 +16,6 @@ import { ConditionalRender } from '@/components/lib/conditional-render'
 
 import { useGetAuthUrl } from '@/lib/hooks/use-get-auth-url.hook'
 import { useGetAuthDocs } from '@/lib/hooks/use-get-auth-docs.hook'
-import { useGetAuthContact } from '@/lib/hooks/use-get-auth-contact.hook'
 import { useGetAdditionalUrl } from '@/lib/hooks/use-get-additional-url.hook'
 import { authStore } from '@/store/auth-store'
 
@@ -30,7 +28,6 @@ export const Header = () => {
   const { data: authUrl } = useGetAuthUrl()
   const { data: authDocs } = useGetAuthDocs()
   const { data: additionalUrl } = useGetAdditionalUrl()
-  const { data: authContact } = useGetAuthContact()
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
 
   const onLogout = () => {
@@ -52,36 +49,30 @@ export const Header = () => {
             <DynamicLogo className={styles.logo} height={32} width={120} />
           </Tappable>
         </Link>
-        <ConditionalRender conditions={[!!additionalUrl?.length]}>
-          <Link className={styles.navLink} to={additionalUrl || ''}>
-            <Button before={<Icon56WebDeviceOutline height={28} width={28} />} mode='tertiary' size='l'>
-              {t('Browsers')}
+
+        <div className={styles.navGroup}>
+          <Link className={styles.navLink} to={getDevicesRoute()}>
+            <Button before={<Icon28DevicesOutline />} mode='tertiary' size='l'>
+              {t('Devices')}
             </Button>
           </Link>
-        </ConditionalRender>
-        <Link className={styles.navLink} to={getDevicesRoute()}>
-          <Button before={<Icon28DevicesOutline />} mode='tertiary' size='l'>
-            {t('Devices')}
-          </Button>
-        </Link>
-        <Link className={styles.navLink} to={getSettingsRoute()}>
-          <Button before={<Icon28SettingsOutline />} mode='tertiary' size='l'>
-            {t('Settings')}
-          </Button>
-        </Link>
+          <Link className={styles.navLink} to={getSettingsRoute()}>
+            <Button before={<Icon28SettingsOutline />} mode='tertiary' size='l'>
+              {t('Settings')}
+            </Button>
+          </Link>
+          <ConditionalRender conditions={[!!additionalUrl?.length]}>
+            <Link className={styles.navLink} to={additionalUrl || ''}>
+              <Button before={<Icon56WebDeviceOutline height={28} width={28} />} mode='tertiary' size='l'>
+                {t('Browsers')}
+              </Button>
+            </Link>
+          </ConditionalRender>
+        </div>
+
       </div>
+
       <div className={styles.rightSide}>
-        <Button
-          before={<Icon16MailOutline />}
-          Component='a'
-          disabled={!authContact}
-          href={authContact}
-          mode='tertiary'
-          size='m'
-          target='_blank'
-        >
-          {t('DeviceHub Support')}
-        </Button>
         <Button
           before={<Icon16HelpOutline />}
           Component='a'
@@ -93,10 +84,17 @@ export const Header = () => {
         >
           {t('Help')}
         </Button>
-        <Button before={<Icon16DoorEnterArrowRightOutline />} mode='tertiary' size='m' onClick={onLogout}>
+        <Button
+          before={<Icon16DoorEnterArrowRightOutline />}
+          className={styles.logoutBtn}
+          mode='secondary'
+          size='m'
+          onClick={onLogout}
+        >
           {t('Logout')}
         </Button>
       </div>
+
       <WarningModal
         description={t('You are authenticated via an automatic login method')}
         isCancelShown={false}

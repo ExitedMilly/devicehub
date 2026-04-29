@@ -7,13 +7,12 @@
   overflow: hidden;
   display: grid;
   grid-template:
-    'deviceButtons deviceBooking'
-    'deviceButtons remoteDebug'
-    'deviceButtons linkOpener'
-    'appUpload shell'
-    'appUpload shell'
-    'clipboard shell' / minmax(400px, 1fr) 1fr;
-  gap: 10px;
+    'shell         deviceButtons'
+    'shell         remoteDebug'
+    'shell         linkOpener'
+    'appUpload     clipboard'
+    'appUpload     deviceBooking' / 1fr minmax(360px, 1fr);
+  gap: 14px;
 
   @container (max-width: 620px) {
     grid-template:
@@ -23,7 +22,7 @@
       'clipboard'
       'deviceBooking'
       'appUpload'
-      'remoteDebug' / minmax(400px, auto);
+      'remoteDebug' / minmax(360px, auto);
   }
 }
 
@@ -42,7 +41,7 @@
 
 .shell {
   grid-area: shell;
-  align-self: start;
+  align-self: stretch;
 }
 
 .clipboard {

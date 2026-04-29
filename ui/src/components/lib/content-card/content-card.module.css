@@ -1,5 +1,13 @@
 .contentCard {
   overflow: hidden;
+  border-radius: var(--card-radius) !important;
+  box-shadow: var(--card-shadow);
+  transition: var(--card-transition);
+  border-top: 3px solid var(--card-accent, var(--accent-blue));
+}
+
+.contentCard:hover {
+  box-shadow: var(--card-shadow-hover);
 }
 
 .cardContainer {
@@ -7,12 +15,19 @@
 }
 
 .cardHeader {
-  height: 28px;
-  margin-bottom: 20px;
+  height: 32px;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--vkui--color_image_border_alpha);
 }
 
 .cardTitle {
   margin-left: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--vkui--color_text_secondary);
 }
 
 .separator {

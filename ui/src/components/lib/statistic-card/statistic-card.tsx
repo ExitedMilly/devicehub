@@ -25,6 +25,7 @@ type StatisticCardProps = {
   text?: string
   value?: string | number
   color?: string
+  accentColor?: string
   appearance?: 'accent' | 'neutral' | 'accent-green' | 'accent-red' | 'custom'
   className?: string
 }
@@ -34,6 +35,7 @@ export const StatisticCard = ({
   value,
   className,
   color,
+  accentColor,
   appearance = 'custom',
   icon = StatisticCardIcon.DEVICES_OUTLINE,
 }: StatisticCardProps) => (
@@ -43,6 +45,7 @@ export const StatisticCard = ({
     className={cn(className, styles.statisticCard)}
     mode='primary'
     size='l'
+    style={accentColor ? { '--stat-accent': accentColor } as React.CSSProperties : undefined}
   >
     <ContentBadge.SlotIcon>{STATISTIC_ICON_MAP[icon]}</ContentBadge.SlotIcon>
     <Spacing />
