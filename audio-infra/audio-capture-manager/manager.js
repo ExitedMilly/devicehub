@@ -68,7 +68,6 @@ const EMULATOR_MAP_RAW = process.env.EMULATOR_MAP || '';
 const CLUSTER_ID = 0x1f43b675;
 
 const instances = new Map();
-const micInstances = new Map(); // serial → legacy MicrophoneInstance
 const micRtcInstances = new Map(); // serial → WebRTCMicrophoneInstance
 const cameraInstances = new Map(); // serial → CameraInstance
 const gpsSessions = new Map(); // serial -> keepalive session
@@ -818,266 +817,6 @@ class CaptureInstance {
     }
 }
 
-// ===================== MicrophoneInstance =====================
-// Receives WebM/Opus from browser WS, decodes to PCM via FFmpeg,
-// sends PCM to Android emulator via gRPC injectAudio.
-
-class MicrophoneInstance {
-    constructor(serial, sinkIndex) {
-        this.serial = serial;
-        this.sinkIndex = sinkIndex;
-        this.hostname = serial.split(':')[0]; // emulator-1:5555 → emulator-1
-        this.grpcAddress = this.hostname + ':' + GRPC_PORT;
-        this.ffmpeg = null;
-        this.grpcCall = null;
-        this.state = 'idle'; // idle | running | error | stopped
-        this.client = null; // only one browser can feed mic at a time
-        this.startedAt = null;
-        this.lastError = null;
-        this.bytesReceived = 0;
-        this.pcmBytesSent = 0;
-    }
-
-    start(ws) {
-        if (this.client) {
-            ws.close(4009, 'Mic already in use for ' + this.serial);
-            return;
-        }
-
-        if (!emulatorProto) {
-            ws.close(4010, 'gRPC proto not loaded');
-            return;
-        }
-
-        this.client = ws;
-        this.state = 'running';
-        this.startedAt = new Date();
-        this.bytesReceived = 0;
-        this.pcmBytesSent = 0;
-        this.lastError = null;
-
-        console.log('[mic:' + this.serial + '] Starting mic input via gRPC → ' + this.grpcAddress);
-
-        // Create gRPC client
-        const grpcClient = new emulatorProto.EmulatorController(
-            this.grpcAddress,
-            grpc.credentials.createInsecure()
-        );
-
-        // Start injectAudio streaming call
-        this.grpcCall = grpcClient.injectAudio((err, response) => {
-            if (err) {
-                console.error('[mic:' + this.serial + '] gRPC injectAudio error: ' + err.message);
-                this.lastError = 'gRPC: ' + err.message;
-            } else {
-                console.log('[mic:' + this.serial + '] gRPC injectAudio completed');
-            }
-        });
-
-        // FFmpeg: read WebM/Opus from stdin → decode → output raw PCM s16le to stdout
-        // Low-latency flags to minimize internal buffering
-        this.ffmpeg = spawn('ffmpeg', [
-            '-hide_banner',
-            '-loglevel', 'warning',
-            '-fflags', 'nobuffer',
-            '-flags', 'low_delay',
-            '-probesize', '32',
-            '-analyzeduration', '0',
-            '-f', 'webm',
-            '-i', 'pipe:0',
-            '-f', 's16le',
-            '-ar', String(SAMPLE_RATE),
-            '-ac', String(CHANNELS),
-            'pipe:1'
-        ], {
-            stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        this.ffmpeg.on('spawn', () => {
-            console.log('[mic:' + this.serial + '] FFmpeg started (PID ' + this.ffmpeg.pid + ')');
-        });
-
-        // PCM throttling: collect PCM into 20ms chunks and send at real-time pace
-        // 48000 Hz * 1 channel * 2 bytes (s16le) * 0.020s = 1920 bytes per chunk
-        const CHUNK_BYTES = SAMPLE_RATE * CHANNELS * 2 * FRAME_DURATION_MS / 1000;
-        const MAX_BUFFER_BYTES = CHUNK_BYTES * 5; // max 100ms buffer — drop old data beyond this
-        let pcmBuffer = Buffer.alloc(0);
-        this.pcmTimer = setInterval(() => {
-            if (pcmBuffer.length >= CHUNK_BYTES && this.grpcCall) {
-                // Drop stale data: if buffer grew beyond 100ms, skip to latest
-                if (pcmBuffer.length > MAX_BUFFER_BYTES) {
-                    const dropped = pcmBuffer.length - CHUNK_BYTES;
-                    pcmBuffer = pcmBuffer.subarray(pcmBuffer.length - CHUNK_BYTES);
-                }
-                const chunk = pcmBuffer.subarray(0, CHUNK_BYTES);
-                pcmBuffer = pcmBuffer.subarray(CHUNK_BYTES);
-                this.pcmBytesSent += chunk.length;
-                try {
-                    this.grpcCall.write({
-                        format: {
-                            samplingRate: SAMPLE_RATE,
-                            channels: 0, // Mono
-                            format: 1    // AUD_FMT_S16
-                        },
-                        timestamp: Date.now() * 1000,
-                        audio: chunk
-                    });
-                } catch (err) {
-                    console.error('[mic:' + this.serial + '] gRPC write error: ' + err.message);
-                }
-            }
-        }, FRAME_DURATION_MS);
-
-        // FFmpeg stdout → PCM buffer (capped to prevent unbounded growth)
-        this.ffmpeg.stdout.on('data', (pcmChunk) => {
-            pcmBuffer = Buffer.concat([pcmBuffer, pcmChunk]);
-            // Hard cap: never let buffer exceed 200ms to prevent memory issues
-            if (pcmBuffer.length > MAX_BUFFER_BYTES * 2) {
-                pcmBuffer = pcmBuffer.subarray(pcmBuffer.length - CHUNK_BYTES);
-            }
-        });
-
-        this.ffmpeg.stderr.on('data', (data) => {
-            const msg = data.toString().trim();
-            if (msg) {
-                console.log('[mic:' + this.serial + '] FFmpeg: ' + msg);
-            }
-        });
-
-        this.ffmpeg.on('error', (err) => {
-            this.state = 'error';
-            this.lastError = err.message;
-            console.error('[mic:' + this.serial + '] FFmpeg error: ' + err.message);
-        });
-
-        this.ffmpeg.on('exit', (code, signal) => {
-            console.log('[mic:' + this.serial + '] FFmpeg exited: code=' + code + ' signal=' + signal);
-            this.ffmpeg = null;
-            if (this.state !== 'stopped') {
-                this.state = 'idle';
-            }
-        });
-
-        // Receive WebM/Opus chunks from browser and pipe to FFmpeg stdin
-        let lastMessageTime = Date.now();
-        ws.on('message', (data) => {
-            const now = Date.now();
-            const gap = now - lastMessageTime;
-            lastMessageTime = now;
-
-            // If gap > 1 second — data is stale, restart FFmpeg+gRPC to flush buffers
-            if (gap > 1000 && this.state === 'running') {
-                console.log('[mic:' + this.serial + '] Gap detected (' + gap + 'ms), restarting pipeline');
-                this._stopPipeline();
-                this._startPipeline();
-                return;
-            }
-
-            if (this.ffmpeg && this.ffmpeg.stdin && !this.ffmpeg.stdin.destroyed) {
-                const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-                this.bytesReceived += buf.length;
-                try {
-                    this.ffmpeg.stdin.write(buf);
-                } catch (err) {
-                    console.error('[mic:' + this.serial + '] Write error: ' + err.message);
-                }
-            }
-        });
-
-        ws.on('close', () => {
-            console.log('[mic:' + this.serial + '] Browser disconnected');
-            this.stop();
-        });
-
-        ws.on('error', (err) => {
-            console.error('[mic:' + this.serial + '] WS error: ' + err.message);
-            this.stop();
-        });
-    }
-
-    _stopPipeline() {
-        this._writeInFlight = false;
-    if (this._writerTimer) {
-        clearInterval(this._writerTimer);
-        this._writerTimer = null;
-    }
-    this._latestFrame = null;
-    this._latestFrameMeta = null;
-    if (this.videoSink) {
-        try { this.videoSink.stop(); } catch (e) { /* ignore */ }
-        this.videoSink = null;
-    }
-    if (this.peerConnection) {
-        this.peerConnection.onicecandidate = null;
-        this.peerConnection.ontrack = null;
-        this.peerConnection.onconnectionstatechange = null;
-        try { this.peerConnection.close(); } catch (e) { /* ignore */ }
-        this.peerConnection = null;
-    }
-    // Close v4l2 device
-    if (this._v4l2fd) {
-        try { require('fs').closeSync(this._v4l2fd); } catch (e) { /* ignore */ }
-        this._v4l2fd = null;
-    }
-    // Stop any ffmpegWriter (legacy)
-    if (this.ffmpegWriter) {
-        try { this.ffmpegWriter.kill('SIGTERM'); } catch (e) { /* ignore */ }
-        this.ffmpegWriter = null;
-    }
-    this._draining = false;
-}
-
-    stop() {
-        if (this.state === 'stopped') return;
-        console.log('[mic:' + this.serial + '] Stopping mic input (received ' +
-            this.bytesReceived + ' bytes, sent ' + this.pcmBytesSent + ' PCM bytes via gRPC)');
-        this.state = 'stopped';
-
-        this._stopPipeline();
-
-        if (this.ffmpeg) {
-            if (this.ffmpeg.stdin && !this.ffmpeg.stdin.destroyed) {
-                this.ffmpeg.stdin.end();
-            }
-            const ff = this.ffmpeg;
-            setTimeout(() => {
-                try { ff.kill('SIGTERM'); } catch (e) { /* ignore */ }
-                setTimeout(() => {
-                    try { ff.kill('SIGKILL'); } catch (e) { /* ignore */ }
-                }, 3000);
-            }, 2000);
-            this.ffmpeg = null;
-        }
-
-        if (this.grpcCall) {
-            try { this.grpcCall.end(); } catch (e) { /* ignore */ }
-            this.grpcCall = null;
-        }
-
-        if (this.client) {
-            try { this.client.close(1000, 'Mic stopped'); } catch (e) { /* ignore */ }
-            this.client = null;
-        }
-
-        // Reset to idle so the next browser can connect
-        this.state = 'idle';
-    }
-
-    toJSON() {
-        return {
-            serial: this.serial,
-            sinkIndex: this.sinkIndex,
-            grpcAddress: this.grpcAddress,
-            state: this.state,
-            hasClient: !!this.client,
-            bytesReceived: this.bytesReceived,
-            pcmBytesSent: this.pcmBytesSent,
-            startedAt: this.startedAt,
-            lastError: this.lastError,
-            ffmpegPid: this.ffmpeg ? this.ffmpeg.pid : null
-        };
-    }
-}
 
 
 function int16ArrayToBuffer(samples) {
@@ -2507,7 +2246,6 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({
             status: 'ok',
             instances: instances.size,
-            micInstances: micInstances.size,
             gpsSessions: gpsSessions.size,
             poseStates: poseStates.size,
             lightStates: lightStates.size,
@@ -2520,8 +2258,6 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/capture/status') {
         const status = {};
         for (const [serial, inst] of instances) status[serial] = inst.toJSON();
-        const micStatus = {};
-        for (const [serial, inst] of micInstances) micStatus[serial] = inst.toJSON();
         // Include mic state per emulator (states are already keyed by serial)
         const micStates = {};
         for (const [serial, state] of micStateMonitor.states) {
@@ -2534,7 +2270,7 @@ const server = http.createServer((req, res) => {
             cameraStates[serial] = state;
         }
         res.writeHead(200);
-        res.end(JSON.stringify({ capture: status, mic: micStatus, micStates: micStates, camera: cameraStatus, cameraStates: cameraStates }, null, 2));
+        res.end(JSON.stringify({ capture: status, micStates: micStates, camera: cameraStatus, cameraStates: cameraStates }, null, 2));
         return;
     }
     if (req.method === 'GET' && url.pathname === '/api/gps/status') {
@@ -2943,40 +2679,6 @@ wss.on('connection', (ws, req) => {
         return;
     }
 
-    // Mic input: browser → emulator
-    const micMatch = url.pathname.match(/^\/mic\/(.+)$/);
-    if (micMatch) {
-        const serial = decodeURIComponent(micMatch[1]);
-
-        // Resolve sinkIndex: check capture instances first, then use registry
-        // registry.resolve() will auto-assign if hostname is new
-        let sinkIndex = null;
-        const captureInstance = instances.get(serial);
-        if (captureInstance) {
-            sinkIndex = captureInstance.sinkIndex;
-        } else {
-            // Serial format is "hostname:port" (e.g. "emulator-1:5555")
-            const hostname = serial.split(':')[0];
-            const info = registry.resolve(hostname);
-            sinkIndex = info.sinkIndex;
-        }
-
-        // Get or create MicrophoneInstance
-        let micInst = micInstances.get(serial);
-        if (!micInst || micInst.state === 'stopped') {
-            micInst = new MicrophoneInstance(serial, sinkIndex);
-            micInstances.set(serial, micInst);
-        }
-
-        if (micInst.client) {
-            ws.close(4009, 'Mic already in use for ' + serial);
-            return;
-        }
-
-        micInst.start(ws);
-        return;
-    }
-
     // Mic input via WebRTC: browser → emulator
     const micRtcMatch = url.pathname.match(/^\/mic-rtc\/(.+)$/);
     if (micRtcMatch) {
@@ -3081,7 +2783,6 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     }
     console.log('[audio-capture-manager] HTTP API: http://0.0.0.0:' + MANAGER_PORT + '/api/');
     console.log('[audio-capture-manager] Audio WS:  ws://0.0.0.0:' + MANAGER_PORT + '/audio/{serial}');
-    console.log('[audio-capture-manager] Mic WS:    ws://0.0.0.0:' + MANAGER_PORT + '/mic/{serial}');
     console.log('[audio-capture-manager] Mic RTC WS: ws://0.0.0.0:' + MANAGER_PORT + '/mic-rtc/{serial}');
     console.log('[audio-capture-manager] Mic State:  ws://0.0.0.0:' + MANAGER_PORT + '/mic-state/{serial}');
     console.log('[audio-capture-manager] Camera WS:  ws://0.0.0.0:' + MANAGER_PORT + '/camera/{serial}');
@@ -3112,9 +2813,8 @@ process.on('SIGTERM', () => {
     paMonitor.stop();
     micStateMonitor.stop();
     cameraStateMonitor.stop();
-    stopCameraWriter();  
+    stopCameraWriter();
     for (const [, inst] of instances) inst.stop();
-    for (const [, inst] of micInstances) inst.stop();
     for (const [, inst] of micRtcInstances) inst.stop();
     for (const [, inst] of cameraInstances) inst.stop();
     for (const serial of Array.from(gpsSessions.keys())) {
@@ -3128,9 +2828,8 @@ process.on('SIGINT', () => {
     paMonitor.stop();
     micStateMonitor.stop();
     cameraStateMonitor.stop();
-    stopCameraWriter();  
+    stopCameraWriter();
     for (const [, inst] of instances) inst.stop();
-    for (const [, inst] of micInstances) inst.stop();
     for (const [, inst] of micRtcInstances) inst.stop();
     for (const [, inst] of cameraInstances) inst.stop();
     for (const serial of Array.from(gpsSessions.keys())) {
