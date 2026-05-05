@@ -4,7 +4,6 @@ const path = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
 const { URL } = require('url');
 const grpc = require('@grpc/grpc-js');
-const protoLoader = require('@grpc/proto-loader');
 
 // WebRTC for camera input
 const { RTCPeerConnection, RTCSessionDescription } = require('@roamhq/wrtc');
@@ -13,66 +12,19 @@ const walkSimulator = require('./walk-simulator');
 const poseScenario = require('./pose-scenario');
 const backupLogical = require('./backup-logical');
 
-const MANAGER_PORT = parseInt(process.env.MANAGER_PORT || '7600');
-const PA_SERVER = process.env.PA_SERVER || 'unix:/run/pulse/shared.sock';
-const OPUS_BITRATE = process.env.OPUS_BITRATE || '64000';
-const MIC_PIPE_DIR = process.env.MIC_PIPE_DIR || '/run/pulse/mic_pipes';
-const GRPC_PORT = parseInt(process.env.EMULATOR_GRPC_PORT || '8554');
-const SAMPLE_RATE = 48000;
-const CHANNELS = 1;
-const FRAME_DURATION_MS = 20;
-const MAX_RESPAWN_DELAY_MS = 30000;
+const config = require('./config');
+const {
+    MANAGER_PORT, PA_SERVER, OPUS_BITRATE, MIC_PIPE_DIR, GRPC_PORT,
+    SAMPLE_RATE, CHANNELS, FRAME_DURATION_MS, MAX_RESPAWN_DELAY_MS,
+    MIC_STATE_POLL_MS, CAMERA_V4L2_DEVICE, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS,
+    GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
+    CLUSTER_ID, CAMERA_STATE_POLL_MS,
+} = config;
+const { instances, micRtcInstances, cameraInstances, gpsSessions, poseStates, lightStates } = require('./stores');
+const { emulatorProto, getGrpcAddressFromSerial, callUnaryGrpc } = require('./grpc-client');
+const { runAdb } = require('./adb-runner');
+const { int16ArrayToBuffer, downmixToMonoInt16, resampleMonoInt16Nearest } = require('./audio/helpers');
 
-
-// Mic state polling interval (how often we check if Android is listening)
-const MIC_STATE_POLL_MS = parseInt(process.env.MIC_STATE_POLL_MS || '1500');
-
-// Camera config
-const CAMERA_V4L2_DEVICE = process.env.CAMERA_V4L2_DEVICE || '/dev/video0';
-const CAMERA_WIDTH = parseInt(process.env.CAMERA_WIDTH || '640');
-const CAMERA_HEIGHT = parseInt(process.env.CAMERA_HEIGHT || '480');
-const CAMERA_FPS = parseInt(process.env.CAMERA_FPS || '25');
-const GPS_KEEPALIVE_INTERVAL_MS = parseInt(process.env.GPS_KEEPALIVE_INTERVAL_MS || '20000');
-
-
-// Load emulator gRPC proto
-const PROTO_PATH = path.join(__dirname, 'emulator_controller.proto');
-let emulatorProto = null;
-try {
-    const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
-        keepCase: true,
-        longs: String,
-        enums: String,
-        defaults: true,
-        oneofs: true
-    });
-    const proto = grpc.loadPackageDefinition(packageDefinition);
-    emulatorProto = proto.android.emulation.control;
-    console.log('[grpc] Loaded emulator_controller.proto');
-} catch (err) {
-    console.error('[grpc] Failed to load proto: ' + err.message);
-    console.error('[grpc] Microphone input via gRPC will not be available');
-}
-
-// Auto-discovery config
-const PA_POLL_INTERVAL_MS = parseInt(process.env.PA_POLL_INTERVAL || '3000');
-const AUTO_DISCOVER = process.env.AUTO_DISCOVER !== 'false'; // enabled by default
-
-// Emulator config: maps container hostname patterns to sink indexes and serials
-// Format: EMULATOR_MAP=container_prefix:sink_index:serial,...
-// Example: EMULATOR_MAP=emulator-1:1:emulator-1:5555,emulator-2:2:emulator-2:5555
-// If not set, auto-assigns based on order of appearance
-const EMULATOR_MAP_RAW = process.env.EMULATOR_MAP || '';
-
-// WebM element IDs
-const CLUSTER_ID = 0x1f43b675;
-
-const instances = new Map();
-const micRtcInstances = new Map(); // serial → WebRTCMicrophoneInstance
-const cameraInstances = new Map(); // serial → CameraInstance
-const gpsSessions = new Map(); // serial -> keepalive session
-const poseStates = new Map(); // serial -> last applied pose
-const lightStates = new Map(); // serial -> last applied light state
 
 // ===================== Emulator Registry =====================
 // Maps container hostnames to sink indexes and serials
@@ -315,8 +267,6 @@ const micStateMonitor = new MicStateMonitor();
 // ===================== Camera State Monitor =====================
 // Polls adb "dumpsys media.camera" for Active Camera Clients.
 // When Android app opens camera → 'active', closes → 'inactive'.
-
-const CAMERA_STATE_POLL_MS = parseInt(process.env.CAMERA_STATE_POLL_MS || '1500');
 
 class CameraStateMonitor {
     constructor() {
@@ -817,47 +767,6 @@ class CaptureInstance {
     }
 }
 
-
-
-function int16ArrayToBuffer(samples) {
-    return Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
-}
-
-function downmixToMonoInt16(samples, channelCount) {
-    if (!samples || channelCount <= 1) {
-        return samples;
-    }
-
-    const frameCount = Math.floor(samples.length / channelCount);
-    const mono = new Int16Array(frameCount);
-
-    for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
-        let sum = 0;
-        const base = frameIndex * channelCount;
-        for (let channel = 0; channel < channelCount; channel++) {
-            sum += samples[base + channel];
-        }
-        mono[frameIndex] = Math.max(-32768, Math.min(32767, Math.round(sum / channelCount)));
-    }
-
-    return mono;
-}
-
-function resampleMonoInt16Nearest(samples, srcRate, dstRate) {
-    if (!samples || srcRate === dstRate || samples.length === 0) {
-        return samples;
-    }
-
-    const outLength = Math.max(1, Math.round(samples.length * dstRate / srcRate));
-    const out = new Int16Array(outLength);
-
-    for (let i = 0; i < outLength; i++) {
-        const srcIndex = Math.min(samples.length - 1, Math.round(i * srcRate / dstRate));
-        out[i] = samples[srcIndex];
-    }
-
-    return out;
-}
 
 class WebRTCMicrophoneInstance {
     constructor(serial, sinkIndex) {
@@ -1709,71 +1618,6 @@ function readJsonBody(req) {
     });
 }
 
-function runAdb(serial, args, options = {}) {
-    const { allowFailure = false, timeoutMs = 10000 } = options;
-
-    return new Promise((resolve, reject) => {
-        const child = spawn('adb', ['-s', serial, ...args], {
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
-
-        let stdout = '';
-        let stderr = '';
-        let settled = false;
-
-        const timer = setTimeout(() => {
-            if (settled) return;
-            settled = true;
-            try {
-                child.kill('SIGKILL');
-            } catch {}
-            reject(new Error(`adb timeout after ${timeoutMs}ms: adb -s ${serial} ${args.join(' ')}`));
-        }, timeoutMs);
-
-        child.stdout.on('data', (chunk) => {
-            stdout += chunk.toString();
-        });
-
-        child.stderr.on('data', (chunk) => {
-            stderr += chunk.toString();
-        });
-
-        child.on('error', (err) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            reject(err);
-        });
-
-        child.on('close', (code) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-
-            const result = {
-                ok: code === 0,
-                code,
-                stdout: stdout.trim(),
-                stderr: stderr.trim(),
-            };
-
-            if (code === 0 || allowFailure) {
-                resolve(result);
-                return;
-            }
-
-            reject(
-                new Error(
-                    `adb failed (code ${code}): adb -s ${serial} ${args.join(' ')}\n` +
-                    (stderr.trim() || stdout.trim() || 'no output')
-                )
-            );
-        });
-    });
-}
-
-
-
 
 function normalizeGpsProvider(provider) {
     const allowed = new Set(['gps', 'fused', 'network', 'passive']);
@@ -1972,22 +1816,6 @@ getGrpcAddressFromSerial: getGrpcAddressFromSerial,
 setDevicePoseRotation: setDevicePoseRotation,
 });
 
-function getGrpcAddressFromSerial(serial) {
-    const hostname = serial.split(':')[0];
-    return hostname + ':' + GRPC_PORT;
-}
-
-function callUnaryGrpc(client, method, payload) {
-    return new Promise((resolve, reject) => {
-        client[method](payload, (err, res) => {
-            if (err) {
-                reject(err);
-                return;
-            }
-            resolve(res);
-        });
-    });
-}
 
 function validatePoseAngles(pitch, yaw, roll) {
     const p = Number(pitch);
