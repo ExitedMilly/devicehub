@@ -113,4 +113,8 @@ function stopGlobalBlackFeed() {
     // Only stopCameraWriter() actually kills it (on SIGTERM).
 }
 
-module.exports = { startCameraWriter, stopCameraWriter, writeCameraFrame, startGlobalBlackFeed, stopGlobalBlackFeed };
+function getCameraWriterPid() {
+    return cameraWriterProcess ? cameraWriterProcess.pid : null;
+}
+
+module.exports = { startCameraWriter, stopCameraWriter, writeCameraFrame, startGlobalBlackFeed, stopGlobalBlackFeed, getCameraWriterPid };
