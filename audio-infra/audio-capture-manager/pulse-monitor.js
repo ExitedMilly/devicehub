@@ -5,6 +5,7 @@ const { PA_SERVER, PA_POLL_INTERVAL_MS, AUTO_DISCOVER } = require('./config');
 const { instances } = require('./stores');
 const { registry } = require('./emulator-registry');
 const { CaptureInstance } = require('./audio/capture');
+const { PULSE_SINK_PREFIX } = require('./config');
 
 // ===================== PA Monitor =====================
 // Polls PulseAudio for QEMU sink-inputs, auto-routes and auto-starts capture
@@ -79,7 +80,7 @@ class PAMonitor {
     onNewQemu(input) {
         const hostname = input.hostname || 'unknown';
         const info = registry.resolve(hostname);
-        const targetSink = 'emu_audio_' + info.sinkIndex;
+        const targetSink = PULSE_SINK_PREFIX + info.sinkIndex;
 
         console.log('[pa-monitor] New QEMU detected: sink-input #' + input.id +
             ' from ' + hostname + ' → routing to ' + targetSink +

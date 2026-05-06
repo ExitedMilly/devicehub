@@ -6,6 +6,8 @@ const {
     PA_SERVER, CHANNELS, SAMPLE_RATE, FRAME_DURATION_MS,
     OPUS_BITRATE, MAX_RESPAWN_DELAY_MS, CLUSTER_ID,
 } = require('../config');
+const { PULSE_SINK_PREFIX } = require('../config');
+
 
 // ===================== CaptureInstance =====================
 
@@ -13,7 +15,7 @@ class CaptureInstance {
     constructor(serial, sinkIndex) {
         this.serial = serial;
         this.sinkIndex = sinkIndex;
-        this.sinkName = 'emu_audio_' + sinkIndex;
+        this.sinkName = PULSE_SINK_PREFIX + sinkIndex;;
         this.monitorSource = this.sinkName + '.monitor';
         this.ffmpeg = null;
         this.state = 'stopped';

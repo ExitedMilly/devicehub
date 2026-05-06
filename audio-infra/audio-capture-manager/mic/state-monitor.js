@@ -4,6 +4,7 @@ const { execSync } = require('child_process');
 const { WebSocket } = require('ws');
 const { MIC_STATE_POLL_MS } = require('../config');
 const { registry } = require('../emulator-registry');
+const { ADB_PORT } = require('../config');
 
 // ===================== Mic State Monitor =====================
 // Polls PulseAudio source-outputs for QEMU Corked state.
@@ -43,7 +44,7 @@ class MicStateMonitor {
     }
 
     pollEmulator(hostname, serial) {
-        const adbTarget = hostname + ':5555';
+        const adbTarget = hostname + ':' + ADB_PORT;;
 
         // Ensure adb is connected to this emulator
         if (!this.adbConnected.get(serial)) {

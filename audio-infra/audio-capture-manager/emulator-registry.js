@@ -1,6 +1,7 @@
 'use strict';
 
 const { EMULATOR_MAP_RAW } = require('./config');
+const { ADB_PORT } = require('./config');
 
 // ===================== Emulator Registry =====================
 // Maps container hostnames to sink indexes and serials
@@ -44,7 +45,7 @@ class EmulatorRegistry {
         }
         // Auto-assign
         const sinkIndex = this.nextAutoIndex++;
-        const serial = hostname + ':5555'; // best guess
+        const serial = hostname + ':' + ADB_PORT; // best guess
         const info = { sinkIndex, serial };
         this.map.set(hostname, info);
         console.log('[registry] Auto-assigned: ' + hostname + ' → sink ' + sinkIndex + ', serial ' + serial);
