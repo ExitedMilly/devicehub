@@ -18,4 +18,4 @@ RUN chown -R capture:capture /app
 USER capture
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
     CMD /app/healthcheck.sh
-ENTRYPOINT ["node", "manager.js"]
+ENTRYPOINT ["node", "index.js"]

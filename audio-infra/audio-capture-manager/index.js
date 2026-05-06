@@ -1,6 +1,4 @@
-const { WebSocketServer } = require('ws');
-const { URL } = require('url');
-const { server } = require('./http/server');
+'use strict';
 
 const walkSimulator = require('./domain/walk-simulator');
 const poseScenario = require('./domain/pose-scenario');
@@ -14,137 +12,32 @@ const {
 } = config;
 const { instances, micRtcInstances, cameraInstances, gpsSessions } = require('./stores');
 const { emulatorProto, getGrpcAddressFromSerial, callUnaryGrpc } = require('./grpc-client');
-const { registry } = require('./emulator-registry');
 const { paMonitor } = require('./pulse-monitor');
 const { micStateMonitor } = require('./mic/state-monitor');
 const { cameraStateMonitor } = require('./camera/state-monitor');
 const { stopCameraWriter, startGlobalBlackFeed } = require('./camera/writer');
-const { WebRTCMicrophoneInstance } = require('./mic/webrtc');
-const { CameraInstance } = require('./camera/instance');
 const {
     setMockGpsLocation, stopGpsKeepAlive, startGpsKeepAlive,
 } = require('./domain/gps');
 const { setDevicePoseRotation } = require('./domain/pose');
 
+const { server } = require('./http/server');
+const { attachWsServer } = require('./ws/server');
+
 walkSimulator.init({
-setMockGpsLocation,
-startGpsKeepAlive,
-stopGpsKeepAlive,
+    setMockGpsLocation,
+    startGpsKeepAlive,
+    stopGpsKeepAlive,
 });
 
 poseScenario.init({
-emulatorProto: emulatorProto,
-callUnaryGrpc: callUnaryGrpc,
-getGrpcAddressFromSerial: getGrpcAddressFromSerial,
-setDevicePoseRotation: setDevicePoseRotation,
+    emulatorProto: emulatorProto,
+    callUnaryGrpc: callUnaryGrpc,
+    getGrpcAddressFromSerial: getGrpcAddressFromSerial,
+    setDevicePoseRotation: setDevicePoseRotation,
 });
 
-const wss = new WebSocketServer({ server });
-
-wss.on('connection', (ws, req) => {
-    const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
-
-    // Audio output: emulator → browser
-    const audioMatch = url.pathname.match(/^\/audio\/(.+)$/);
-    if (audioMatch) {
-        const serial = decodeURIComponent(audioMatch[1]);
-        const instance = instances.get(serial);
-        if (!instance) { ws.close(4004, 'No capture for ' + serial); return; }
-        if (instance.state !== 'running') { ws.close(4003, 'Not ready: ' + instance.state); return; }
-        instance.addClient(ws);
-        return;
-    }
-
-    // Mic input via WebRTC: browser → emulator
-    const micRtcMatch = url.pathname.match(/^\/mic-rtc\/(.+)$/);
-    if (micRtcMatch) {
-        const serial = decodeURIComponent(micRtcMatch[1]);
-
-        let sinkIndex = null;
-        const captureInstance = instances.get(serial);
-        if (captureInstance) {
-            sinkIndex = captureInstance.sinkIndex;
-        } else {
-            const hostname = serial.split(':')[0];
-            const info = registry.resolve(hostname);
-            sinkIndex = info.sinkIndex;
-        }
-
-        let micRtcInst = micRtcInstances.get(serial);
-        if (!micRtcInst || micRtcInst.state === 'stopped') {
-            micRtcInst = new WebRTCMicrophoneInstance(serial, sinkIndex);
-            micRtcInstances.set(serial, micRtcInst);
-        }
-
-        if (micRtcInst.client) {
-            ws.close(4009, 'Mic RTC already in use for ' + serial);
-            return;
-        }
-
-        micRtcInst.start(ws);
-        return;
-    }
-
-    // Mic state subscription: browser subscribes to emulator mic state changes
-    const micStateMatch = url.pathname.match(/^\/mic-state\/(.+)$/);
-    if (micStateMatch) {
-        const serial = decodeURIComponent(micStateMatch[1]);
-        console.log('[mic-state] Subscriber connected for ' + serial);
-        micStateMonitor.subscribe(serial, ws);
-
-        ws.on('close', () => {
-            console.log('[mic-state] Subscriber disconnected for ' + serial);
-        });
-        return;
-    }
-
-    // Camera input: browser → emulator (video via v4l2loopback)
-    const cameraMatch = url.pathname.match(/^\/camera\/(.+)$/);
-    if (cameraMatch) {
-        const serial = decodeURIComponent(cameraMatch[1]);
-
-        // Resolve sinkIndex
-        let sinkIndex = null;
-        const captureInstance = instances.get(serial);
-        if (captureInstance) {
-            sinkIndex = captureInstance.sinkIndex;
-        } else {
-            const hostname = serial.split(':')[0];
-            const info = registry.resolve(hostname);
-            sinkIndex = info.sinkIndex;
-        }
-
-        // Get or create CameraInstance
-        let camInst = cameraInstances.get(serial);
-        if (!camInst || camInst.state === 'stopped') {
-            camInst = new CameraInstance(serial, sinkIndex);
-            cameraInstances.set(serial, camInst);
-        }
-
-        if (camInst.client) {
-            ws.close(4009, 'Camera already in use for ' + serial);
-            return;
-        }
-
-        camInst.start(ws);
-        return;
-    }
-
-    // Camera state subscription: browser subscribes to camera active/inactive changes
-    const cameraStateMatch = url.pathname.match(/^\/camera-state\/(.+)$/);
-    if (cameraStateMatch) {
-        const serial = decodeURIComponent(cameraStateMatch[1]);
-        console.log('[camera-state] Subscriber connected for ' + serial);
-        cameraStateMonitor.subscribe(serial, ws);
-
-        ws.on('close', () => {
-            console.log('[camera-state] Subscriber disconnected for ' + serial);
-        });
-        return;
-    }
-
-    ws.close(4000, 'Invalid path');
-});
+attachWsServer(server);
 
 // ===================== Startup =====================
 
