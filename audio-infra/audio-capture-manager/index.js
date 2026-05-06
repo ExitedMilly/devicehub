@@ -23,6 +23,8 @@ const {
 } = require('./domain/gps');
 const { setDevicePoseRotation } = require('./domain/pose');
 
+const { registry } = require('./emulator-registry');
+const { CaptureInstance } = require('./audio/capture');
 const { server } = require('./http/server');
 const { attachWsServer } = require('./ws/server');
 
@@ -84,6 +86,17 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
 
     // Start black feed on v4l2loopback to keep camera alive for emulators
     startGlobalBlackFeed();
+
+    // In single mode, manually bootstrap CaptureInstance since PAMonitor
+    // auto-discovery is disabled.
+    if (SINGLE_MODE) {
+        const hostname = INSTANCE_SERIAL.split(':')[0];
+        const info = registry.resolve(hostname);
+        log.info({ serial: INSTANCE_SERIAL, sinkIndex: info.sinkIndex }, 'Bootstrapping CaptureInstance for single mode');
+        const instance = new CaptureInstance(INSTANCE_SERIAL, info.sinkIndex);
+        instances.set(INSTANCE_SERIAL, instance);
+        instance.start();
+    }
 });
 
 process.on('SIGTERM', () => {

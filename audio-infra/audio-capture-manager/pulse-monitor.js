@@ -1,7 +1,7 @@
 'use strict';
 
 const { execSync } = require('child_process');
-const { PA_SERVER, PA_POLL_INTERVAL_MS, AUTO_DISCOVER } = require('./config');
+const { PA_SERVER, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, SINGLE_MODE } = require('./config');
 const { instances } = require('./stores');
 const { registry } = require('./emulator-registry');
 const { CaptureInstance } = require('./audio/capture');
@@ -19,6 +19,10 @@ class PAMonitor {
     }
 
     start() {
+        if (SINGLE_MODE) {
+            log.info('PAMonitor disabled in single mode');
+            return;
+        }
         if (!AUTO_DISCOVER) {
             log.info('Auto-discovery disabled');
             return;

@@ -6,7 +6,7 @@ const {
     PA_SERVER, CHANNELS, SAMPLE_RATE, FRAME_DURATION_MS,
     OPUS_BITRATE, MAX_RESPAWN_DELAY_MS, CLUSTER_ID,
 } = require('../config');
-const { PULSE_SINK_PREFIX } = require('../config');
+const { PULSE_SINK_PREFIX, SINGLE_MODE, PULSE_SINK_NAME } = require('../config');
 const log = require('../log').getLogger('audio/capture');
 
 
@@ -16,7 +16,9 @@ class CaptureInstance {
     constructor(serial, sinkIndex) {
         this.serial = serial;
         this.sinkIndex = sinkIndex;
-        this.sinkName = PULSE_SINK_PREFIX + sinkIndex;;
+        this.sinkName = (SINGLE_MODE && PULSE_SINK_NAME)
+            ? PULSE_SINK_NAME
+            : PULSE_SINK_PREFIX + sinkIndex;
         this.monitorSource = this.sinkName + '.monitor';
         this.ffmpeg = null;
         this.state = 'stopped';

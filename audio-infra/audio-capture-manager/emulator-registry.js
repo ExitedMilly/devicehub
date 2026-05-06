@@ -1,7 +1,6 @@
 'use strict';
 
-const { EMULATOR_MAP_RAW } = require('./config');
-const { ADB_PORT } = require('./config');
+const { EMULATOR_MAP_RAW, ADB_PORT, SINGLE_MODE, INSTANCE_SERIAL } = require('./config');
 const log = require('./log').getLogger('emulator-registry');
 
 // ===================== Emulator Registry =====================
@@ -12,7 +11,16 @@ class EmulatorRegistry {
         // hostname → { sinkIndex, serial }
         this.map = new Map();
         this.nextAutoIndex = 1;
-        this._parseEnvMap();
+
+        if (SINGLE_MODE) {
+            // Static single-instance mapping. sinkIndex = 1 is a placeholder
+            // (real sink name comes from PULSE_SINK_NAME via audio/capture.js).
+            const hostname = INSTANCE_SERIAL.split(':')[0];
+            this.map.set(hostname, { sinkIndex: 1, serial: INSTANCE_SERIAL });
+            log.info({ hostname, serial: INSTANCE_SERIAL, sinkIndex: 1 }, 'Single-mode static mapping');
+        } else {
+            this._parseEnvMap();
+        }
     }
 
     _parseEnvMap() {
@@ -34,6 +42,12 @@ class EmulatorRegistry {
     }
 
     resolve(hostname) {
+        if (SINGLE_MODE) {
+            // Always return the static single-instance mapping regardless of
+            // input hostname — only one emulator is allowed.
+            return this.map.values().next().value;
+        }
+
         // Exact match
         if (this.map.has(hostname)) {
             return this.map.get(hostname);
