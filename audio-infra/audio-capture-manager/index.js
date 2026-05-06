@@ -10,6 +10,7 @@ const {
     MANAGER_PORT, PA_SERVER, MIC_PIPE_DIR,
     MIC_STATE_POLL_MS, CAMERA_V4L2_DEVICE,
     GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
+    SINGLE_MODE, INSTANCE_SERIAL, EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
 } = config;
 const { instances, micRtcInstances, cameraInstances, gpsSessions } = require('./stores');
 const { emulatorProto, getGrpcAddressFromSerial, callUnaryGrpc } = require('./grpc-client');
@@ -43,6 +44,12 @@ attachWsServer(server);
 // ===================== Startup =====================
 
 server.listen(MANAGER_PORT, '0.0.0.0', () => {
+    log.info({
+        singleMode: SINGLE_MODE,
+        instanceSerial: INSTANCE_SERIAL,
+        emulatorAdbHost: EMULATOR_ADB_HOST,
+        emulatorGrpcHost: EMULATOR_GRPC_HOST,
+    }, SINGLE_MODE ? 'Running in SINGLE-INSTANCE mode' : 'Running in MULTI-INSTANCE mode (legacy)');
     log.info({ port: MANAGER_PORT }, 'Listening on port');
     log.info({ paServer: PA_SERVER }, 'PA_SERVER');
     log.info({ autoDiscover: AUTO_DISCOVER }, 'AUTO_DISCOVER');

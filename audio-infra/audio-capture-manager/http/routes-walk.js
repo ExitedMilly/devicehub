@@ -3,6 +3,7 @@
 const walkSimulator = require('../domain/walk-simulator');
 const log = require('../log').getLogger('http/routes-walk');
 const { readJsonBody } = require('./helpers');
+const { isSerialAllowed, INSTANCE_SERIAL } = require('../config');
 
 function handleWalk(req, res, url) {
     if (req.method === 'GET' && url.pathname === '/api/walk/status') {
@@ -17,6 +18,12 @@ function handleWalk(req, res, url) {
     const walkStatusOneMatch = url.pathname.match(/^\/api\/walk\/(.+)\/status$/);
     if (req.method === 'GET' && walkStatusOneMatch) {
         const serial = decodeURIComponent(walkStatusOneMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         const status = walkSimulator.getStatus(serial);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true, serial, status }));
@@ -26,6 +33,12 @@ function handleWalk(req, res, url) {
     const walkStartMatch = url.pathname.match(/^\/api\/walk\/(.+)\/start$/);
     if (req.method === 'POST' && walkStartMatch) {
         const serial = decodeURIComponent(walkStartMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         readJsonBody(req)
             .then(async (body) => {
                 const status = await walkSimulator.startWalk(serial, body || {});
@@ -43,6 +56,12 @@ function handleWalk(req, res, url) {
     const walkPauseMatch = url.pathname.match(/^\/api\/walk\/(.+)\/pause$/);
     if (req.method === 'POST' && walkPauseMatch) {
         const serial = decodeURIComponent(walkPauseMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         const ok = walkSimulator.pauseWalk(serial);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true, serial, paused: ok, status: walkSimulator.getStatus(serial) }));
@@ -52,6 +71,12 @@ function handleWalk(req, res, url) {
     const walkResumeMatch = url.pathname.match(/^\/api\/walk\/(.+)\/resume$/);
     if (req.method === 'POST' && walkResumeMatch) {
         const serial = decodeURIComponent(walkResumeMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         const ok = walkSimulator.resumeWalk(serial);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true, serial, resumed: ok, status: walkSimulator.getStatus(serial) }));
@@ -61,6 +86,12 @@ function handleWalk(req, res, url) {
     const walkStopMatch = url.pathname.match(/^\/api\/walk\/(.+)\/stop$/);
     if (req.method === 'POST' && walkStopMatch) {
         const serial = decodeURIComponent(walkStopMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         const stopped = walkSimulator.stopWalk(serial);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true, serial, stopped }));

@@ -2,6 +2,8 @@
 
 const { instances } = require('../stores');
 const { CaptureInstance } = require('../audio/capture');
+const { isSerialAllowed, INSTANCE_SERIAL } = require('../config');
+const log = require('../log').getLogger('http/routes-capture');
 
 function handleCapture(req, res, url) {
     if (req.method === 'POST' && url.pathname === '/api/capture/start') {
@@ -11,6 +13,12 @@ function handleCapture(req, res, url) {
             try {
                 const { serial, sinkIndex } = JSON.parse(body);
                 if (!serial || !sinkIndex) { res.writeHead(400); res.end(JSON.stringify({ error: 'serial and sinkIndex required' })); return; }
+                if (!isSerialAllowed(serial)) {
+                    log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+                    res.writeHead(403);
+                    res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+                    return;
+                }
                 if (instances.has(serial)) {
                     const existing = instances.get(serial);
                     if (existing.state === 'running') {
@@ -37,6 +45,12 @@ function handleCapture(req, res, url) {
             try {
                 const { serial } = JSON.parse(body);
                 if (!serial) { res.writeHead(400); res.end(JSON.stringify({ error: 'serial required' })); return; }
+                if (!isSerialAllowed(serial)) {
+                    log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+                    res.writeHead(403);
+                    res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+                    return;
+                }
                 const instance = instances.get(serial);
                 if (!instance) { res.writeHead(404); res.end(JSON.stringify({ error: 'not found' })); return; }
                 instance.stop();

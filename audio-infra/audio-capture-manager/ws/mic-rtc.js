@@ -3,12 +3,19 @@
 const { instances, micRtcInstances } = require('../stores');
 const { registry } = require('../emulator-registry');
 const { WebRTCMicrophoneInstance } = require('../mic/webrtc');
+const { isSerialAllowed, INSTANCE_SERIAL } = require('../config');
+const log = require('../log').getLogger('ws/mic-rtc');
 
 function handleMicRtc(ws, url) {
     const micRtcMatch = url.pathname.match(/^\/mic-rtc\/(.+)$/);
     if (!micRtcMatch) return false;
 
     const serial = decodeURIComponent(micRtcMatch[1]);
+    if (!isSerialAllowed(serial)) {
+        log.info({ serial, instanceSerial: INSTANCE_SERIAL }, 'Serial not allowed in single mode');
+        ws.close(4002, 'Serial not allowed in single mode');
+        return true;
+    }
 
     let sinkIndex = null;
     const captureInstance = instances.get(serial);

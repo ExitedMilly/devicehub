@@ -37,6 +37,27 @@ const CLUSTER_ID = 0x1f43b675;
 
 const CAMERA_STATE_POLL_MS = parseInt(process.env.CAMERA_STATE_POLL_MS || '1500');
 
+// Single-instance mode (P0.2 prototype)
+// When INSTANCE_SERIAL is set, capture-mgr runs in single mode:
+// - Only requests for this serial are accepted
+// - Status endpoints filter to this serial only
+// - PAMonitor / EmulatorRegistry can be configured to skip discovery (PR 2)
+const INSTANCE_SERIAL = process.env.INSTANCE_SERIAL || null;
+const SINGLE_MODE = INSTANCE_SERIAL !== null;
+
+// Optional: explicit emulator host overrides (used in single mode if set)
+const EMULATOR_ADB_HOST = process.env.EMULATOR_ADB_HOST || null;
+const EMULATOR_GRPC_HOST = process.env.EMULATOR_GRPC_HOST || null;
+
+// Optional: explicit pulse sink/source names (used in single mode if set, PR 2)
+const PULSE_SINK_NAME = process.env.PULSE_SINK_NAME || null;
+const PULSE_SOURCE_NAME = process.env.PULSE_SOURCE_NAME || null;
+
+function isSerialAllowed(serial) {
+    if (!SINGLE_MODE) return true;
+    return serial === INSTANCE_SERIAL;
+}
+
 module.exports = {
     MANAGER_PORT, PA_SERVER, OPUS_BITRATE, MIC_PIPE_DIR, GRPC_PORT,
     ADB_PORT, PULSE_SINK_PREFIX,
@@ -44,4 +65,8 @@ module.exports = {
     MIC_STATE_POLL_MS, CAMERA_V4L2_DEVICE, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS,
     GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
     CLUSTER_ID, CAMERA_STATE_POLL_MS,
+    INSTANCE_SERIAL, SINGLE_MODE,
+    EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
+    PULSE_SINK_NAME, PULSE_SOURCE_NAME,
+    isSerialAllowed,
 };

@@ -3,12 +3,19 @@
 const { instances, cameraInstances } = require('../stores');
 const { registry } = require('../emulator-registry');
 const { CameraInstance } = require('../camera/instance');
+const { isSerialAllowed, INSTANCE_SERIAL } = require('../config');
+const log = require('../log').getLogger('ws/camera');
 
 function handleCamera(ws, url) {
     const cameraMatch = url.pathname.match(/^\/camera\/(.+)$/);
     if (!cameraMatch) return false;
 
     const serial = decodeURIComponent(cameraMatch[1]);
+    if (!isSerialAllowed(serial)) {
+        log.info({ serial, instanceSerial: INSTANCE_SERIAL }, 'Serial not allowed in single mode');
+        ws.close(4002, 'Serial not allowed in single mode');
+        return true;
+    }
 
     // Resolve sinkIndex
     let sinkIndex = null;
