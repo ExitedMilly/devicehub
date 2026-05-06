@@ -1,6 +1,7 @@
 'use strict';
 
 const poseScenario = require('../domain/pose-scenario');
+const log = require('../log').getLogger('http/routes-pose');
 const { setDevicePoseRotation } = require('../domain/pose');
 const { readJsonBody } = require('./helpers');
 
@@ -43,7 +44,7 @@ function handlePose(req, res, url) {
                 res.end(JSON.stringify({ ok: true, serial: serial, status: status }));
             })
             .catch((err) => {
-                console.error('[pose-scenario] start failed:', err.message);
+                log.error({ serial: serial, err: err.message }, 'Pose scenario start failed');
                 res.writeHead(400);
                 res.end(JSON.stringify({ ok: false, error: err.message }));
             });
@@ -98,7 +99,7 @@ function handlePose(req, res, url) {
                 }));
             })
             .catch((err) => {
-                console.error('[pose] Failed to apply pose:', err.message);
+                log.error({ serial: serial, err: err.message }, 'Failed to apply pose');
                 res.writeHead(400);
                 res.end(JSON.stringify({
                     ok: false,

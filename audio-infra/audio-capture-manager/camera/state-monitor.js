@@ -5,6 +5,7 @@ const { WebSocket } = require('ws');
 const { CAMERA_STATE_POLL_MS } = require('../config');
 const { registry } = require('../emulator-registry');
 const { ADB_PORT } = require('../config');
+const log = require('../log').getLogger('camera/state-monitor');
 
 // ===================== Camera State Monitor =====================
 // Polls adb "dumpsys media.camera" for Active Camera Clients.
@@ -20,7 +21,7 @@ class CameraStateMonitor {
     }
 
     start() {
-        console.log('[camera-state] Starting camera state monitor via adb (poll every ' + CAMERA_STATE_POLL_MS + 'ms)');
+        log.info({ pollMs: CAMERA_STATE_POLL_MS }, 'Starting camera state monitor via adb');
         this.timer = setInterval(() => this.pollAll(), CAMERA_STATE_POLL_MS);
         setTimeout(() => this.pollAll(), 5000);
     }
@@ -97,7 +98,7 @@ class CameraStateMonitor {
         const oldState = this.states.get(serial);
         if (oldState !== newState) {
             this.states.set(serial, newState);
-            console.log('[camera-state] ' + serial + ': ' + (oldState || 'unknown') + ' → ' + newState);
+            log.info({ serial, from: oldState || 'unknown', to: newState }, 'Camera state changed');
             this._notifySubscribers(serial, newState);
         }
     }

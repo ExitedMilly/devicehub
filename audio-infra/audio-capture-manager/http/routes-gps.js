@@ -1,6 +1,7 @@
 'use strict';
 
 const { GPS_KEEPALIVE_INTERVAL_MS } = require('../config');
+const log = require('../log').getLogger('http/routes-gps');
 const { stopGpsKeepAlive, startGpsKeepAlive, setMockGpsLocation } = require('../domain/gps');
 const walkSimulator = require('../domain/walk-simulator');
 const { readJsonBody } = require('./helpers');
@@ -62,7 +63,7 @@ function handleGps(req, res, url) {
                 }));
             })
             .catch((err) => {
-                console.error('[gps] Failed to apply GPS:', err.message);
+                log.error({ serial, err: err.message }, 'Failed to apply GPS');
                 res.writeHead(400);
                 res.end(JSON.stringify({
                     ok: false,

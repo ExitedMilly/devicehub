@@ -2,6 +2,7 @@
 
 const { EMULATOR_MAP_RAW } = require('./config');
 const { ADB_PORT } = require('./config');
+const log = require('./log').getLogger('emulator-registry');
 
 // ===================== Emulator Registry =====================
 // Maps container hostnames to sink indexes and serials
@@ -24,7 +25,7 @@ class EmulatorRegistry {
                 const sinkIndex = parseInt(parts[1]);
                 const serial = parts.slice(2).join(':'); // serial may contain ':'
                 this.map.set(hostname, { sinkIndex, serial });
-                console.log('[registry] Static mapping: ' + hostname + ' → sink ' + sinkIndex + ', serial ' + serial);
+                log.info({ hostname, sinkIndex, serial }, 'Static mapping registered');
                 if (sinkIndex >= this.nextAutoIndex) {
                     this.nextAutoIndex = sinkIndex + 1;
                 }
@@ -48,7 +49,7 @@ class EmulatorRegistry {
         const serial = hostname + ':' + ADB_PORT; // best guess
         const info = { sinkIndex, serial };
         this.map.set(hostname, info);
-        console.log('[registry] Auto-assigned: ' + hostname + ' → sink ' + sinkIndex + ', serial ' + serial);
+        log.info({ hostname, sinkIndex, serial }, 'Auto-assigned hostname to sink');
         return info;
     }
 }

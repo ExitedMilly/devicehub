@@ -1,5 +1,6 @@
 'use strict';
 
+const log = require('./log').getLogger('index');
 const walkSimulator = require('./domain/walk-simulator');
 const poseScenario = require('./domain/pose-scenario');
 const backupLogical = require('./domain/backup-logical');
@@ -42,31 +43,31 @@ attachWsServer(server);
 // ===================== Startup =====================
 
 server.listen(MANAGER_PORT, '0.0.0.0', () => {
-    console.log('[audio-capture-manager] Listening on port ' + MANAGER_PORT);
-    console.log('[audio-capture-manager] PA_SERVER=' + PA_SERVER);
-    console.log('[audio-capture-manager] AUTO_DISCOVER=' + AUTO_DISCOVER);
-    console.log('[audio-capture-manager] PA_POLL_INTERVAL=' + PA_POLL_INTERVAL_MS + 'ms');
-    console.log('[audio-capture-manager] MIC_STATE_POLL=' + MIC_STATE_POLL_MS + 'ms');
+    log.info({ port: MANAGER_PORT }, 'Listening on port');
+    log.info({ paServer: PA_SERVER }, 'PA_SERVER');
+    log.info({ autoDiscover: AUTO_DISCOVER }, 'AUTO_DISCOVER');
+    log.info({ pollMs: PA_POLL_INTERVAL_MS }, 'PA_POLL_INTERVAL');
+    log.info({ pollMs: MIC_STATE_POLL_MS }, 'MIC_STATE_POLL');
     if (EMULATOR_MAP_RAW) {
-        console.log('[audio-capture-manager] EMULATOR_MAP=' + EMULATOR_MAP_RAW);
+        log.info({ emulatorMap: EMULATOR_MAP_RAW }, 'EMULATOR_MAP');
     }
-    console.log('[audio-capture-manager] HTTP API: http://0.0.0.0:' + MANAGER_PORT + '/api/');
-    console.log('[audio-capture-manager] Audio WS:  ws://0.0.0.0:' + MANAGER_PORT + '/audio/{serial}');
-    console.log('[audio-capture-manager] Mic RTC WS: ws://0.0.0.0:' + MANAGER_PORT + '/mic-rtc/{serial}');
-    console.log('[audio-capture-manager] Mic State:  ws://0.0.0.0:' + MANAGER_PORT + '/mic-state/{serial}');
-    console.log('[audio-capture-manager] Camera WS:  ws://0.0.0.0:' + MANAGER_PORT + '/camera/{serial}');
-    console.log('[audio-capture-manager] Camera State: ws://0.0.0.0:' + MANAGER_PORT + '/camera-state/{serial}');
-    console.log('[audio-capture-manager] MIC_PIPE_DIR=' + MIC_PIPE_DIR);
-    console.log('[audio-capture-manager] CAMERA_V4L2_DEVICE=' + CAMERA_V4L2_DEVICE);
-    console.log('[audio-capture-manager] GPS API: http://0.0.0.0:' + MANAGER_PORT + '/api/gps/{serial}');
-    console.log('[audio-capture-manager] GPS keepalive interval=' + GPS_KEEPALIVE_INTERVAL_MS + 'ms');
-    console.log('[audio-capture-manager] Pose API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}');
-    console.log('[audio-capture-manager] Light API: http://0.0.0.0:' + MANAGER_PORT + '/api/light/{serial}');
-    console.log('[audio-capture-manager] Walk API: http://0.0.0.0:' + MANAGER_PORT + '/api/walk/{serial}/(start|pause|resume|stop|status)');
-    console.log('[audio-capture-manager] Pose Scenario API: http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}/scenario/(start|pause|resume|stop|status)');
-    console.log('[audio-capture-manager] Pose Scenario tick=' + poseScenario.TICK_HZ + ' Hz');
-    console.log('[audio-capture-manager] Backup API: http://0.0.0.0:' + MANAGER_PORT + '/api/backup/{serial} (POST create, GET /status) — dir: ' + backupLogical.BACKUP_DIR);
-    console.log('[audio-capture-manager] Backup: logical (APK + /sdcard/), dir=' + (process.env.BACKUP_DIR || '/backups') + ' — POST /api/backup/{serial}, POST /api/backup/{serial}/restore, GET /api/backup/{serial}/status');
+    log.info({ url: 'http://0.0.0.0:' + MANAGER_PORT + '/api/' }, 'HTTP API');
+    log.info({ url: 'ws://0.0.0.0:' + MANAGER_PORT + '/audio/{serial}' }, 'Audio WS');
+    log.info({ url: 'ws://0.0.0.0:' + MANAGER_PORT + '/mic-rtc/{serial}' }, 'Mic RTC WS');
+    log.info({ url: 'ws://0.0.0.0:' + MANAGER_PORT + '/mic-state/{serial}' }, 'Mic State WS');
+    log.info({ url: 'ws://0.0.0.0:' + MANAGER_PORT + '/camera/{serial}' }, 'Camera WS');
+    log.info({ url: 'ws://0.0.0.0:' + MANAGER_PORT + '/camera-state/{serial}' }, 'Camera State WS');
+    log.info({ micPipeDir: MIC_PIPE_DIR }, 'MIC_PIPE_DIR');
+    log.info({ device: CAMERA_V4L2_DEVICE }, 'CAMERA_V4L2_DEVICE');
+    log.info({ url: 'http://0.0.0.0:' + MANAGER_PORT + '/api/gps/{serial}' }, 'GPS API');
+    log.info({ intervalMs: GPS_KEEPALIVE_INTERVAL_MS }, 'GPS keepalive interval');
+    log.info({ url: 'http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}' }, 'Pose API');
+    log.info({ url: 'http://0.0.0.0:' + MANAGER_PORT + '/api/light/{serial}' }, 'Light API');
+    log.info({ url: 'http://0.0.0.0:' + MANAGER_PORT + '/api/walk/{serial}/(start|pause|resume|stop|status)' }, 'Walk API');
+    log.info({ url: 'http://0.0.0.0:' + MANAGER_PORT + '/api/pose/{serial}/scenario/(start|pause|resume|stop|status)' }, 'Pose Scenario API');
+    log.info({ tickHz: poseScenario.TICK_HZ }, 'Pose Scenario tick');
+    log.info({ url: 'http://0.0.0.0:' + MANAGER_PORT + '/api/backup/{serial}', dir: backupLogical.BACKUP_DIR }, 'Backup API');
+    log.info({ backupDir: process.env.BACKUP_DIR || '/backups' }, 'Backup: logical (APK + /sdcard/)');
     // Start PA auto-discovery
     paMonitor.start();
     // Start mic state monitoring

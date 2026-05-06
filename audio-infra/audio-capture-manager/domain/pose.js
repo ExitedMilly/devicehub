@@ -3,6 +3,7 @@
 const grpc = require('@grpc/grpc-js');
 const { emulatorProto, getGrpcAddressFromSerial, callUnaryGrpc } = require('../grpc-client');
 const { poseStates } = require('../stores');
+const log = require('../log').getLogger('domain/pose');
 
 function validatePoseAngles(pitch, yaw, roll) {
     const p = Number(pitch);
@@ -48,13 +49,7 @@ async function setDevicePoseRotation(serial, pitch, yaw, roll) {
     const normalized = validatePoseAngles(pitch, yaw, roll);
     const grpcAddress = getGrpcAddressFromSerial(serial);
 
-    console.log(
-        '[pose] Applying rotation to ' + serial +
-        ': pitch=' + normalized.pitch +
-        ', yaw=' + normalized.yaw +
-        ', roll=' + normalized.roll +
-        ' via ' + grpcAddress
-    );
+    log.info({ serial, pitch: normalized.pitch, yaw: normalized.yaw, roll: normalized.roll, grpcAddress }, 'Applying rotation');
 
     const grpcClient = new emulatorProto.EmulatorController(
         grpcAddress,

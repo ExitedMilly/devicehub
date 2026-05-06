@@ -23,6 +23,7 @@
 //   readback path is reserved for diagnostics (start logging).
 
 const grpc = require('@grpc/grpc-js');
+const log = require('../log').getLogger('domain/pose-scenario');
 
 // ============================================================
 // CONFIG - tweak here, no logic changes needed.
@@ -277,23 +278,15 @@ async function startScenario(serial, opts) {
     };
     sessions.set(serial, session);
 
-    console.log(
-        '[pose-scenario] Starting "' + name + '" for ' + serial +
-        ' (base p=' + def.base.pitch + ' y=' + def.base.yaw + ' r=' + def.base.roll + ', ' +
-        TICK_HZ + ' Hz, via ' + grpcConn.address + ')'
-    );
+    log.info({ serial, scenario: name, base: def.base, tickHz: TICK_HZ, grpcAddress: grpcConn.address }, 'Starting scenario');
 
     // Apply the base pose once via the heavy path so we get a calibration log.
     try {
         const initial = await _setDevicePoseRotation(serial, def.base.pitch, def.base.yaw, def.base.roll);
-        console.log(
-            '[pose-scenario] Calibration: base pose applied for ' + serial +
-            ', acc=' + JSON.stringify(initial.acceleration) +
-            ', orientation=' + JSON.stringify(initial.orientation)
-        );
+        log.info({ serial, acc: initial.acceleration, orientation: initial.orientation }, 'Calibration: base pose applied');
         session.lastApplied = { pitch: def.base.pitch, yaw: def.base.yaw, roll: def.base.roll };
     } catch (err) {
-        console.error('[pose-scenario] Initial calibration failed for ' + serial + ': ' + err.message);
+        log.error({ serial, err: err.message }, 'Initial calibration failed');
         session.lastError = 'initial: ' + err.message;
     }
 
@@ -326,7 +319,7 @@ async function tick(serial) {
         // Don't spam the log on every failed tick - log once per minute at most.
         const now = Date.now();
         if (now - session.lastErrorLoggedAt > 60000) {
-            console.error('[pose-scenario] tick failed for ' + serial + ': ' + err.message);
+            log.error({ serial, err: err.message }, 'Tick failed');
             session.lastErrorLoggedAt = now;
         }
     } finally {
@@ -343,7 +336,7 @@ function pauseScenario(serial) {
     session.status = 'paused';
     // No keepalive needed - last applied rotation stays as emulator state.
     // Unlike GPS, pose state does not "expire".
-    console.log('[pose-scenario] Paused ' + serial + ' (elapsed=' + Math.round(session.elapsedMs / 1000) + 's)');
+    log.info({ serial, elapsedSec: Math.round(session.elapsedMs / 1000) }, 'Scenario paused');
     return true;
 }
 
@@ -354,7 +347,7 @@ function resumeScenario(serial) {
     session.status = 'running';
     session.lastResumedAt = Date.now();
     session.timer = setInterval(function() { void tick(serial); }, TICK_INTERVAL_MS);
-    console.log('[pose-scenario] Resumed ' + serial);
+    log.info({ serial }, 'Scenario resumed');
     return true;
 }
 
@@ -368,7 +361,7 @@ function stopScenario(serial) {
         }
     } catch (e) { /* ignore */ }
     sessions.delete(serial);
-    console.log('[pose-scenario] Stopped ' + serial);
+    log.info({ serial }, 'Scenario stopped');
     return true;
 }
 

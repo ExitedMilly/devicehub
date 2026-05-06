@@ -12,6 +12,7 @@
 // Usage: node camera-writer.js <width> <height> <fps> <v4l2device>
 
 const { spawn } = require('child_process');
+const log = require('./log').getLogger('camera-writer-child');
 
 const width = parseInt(process.argv[2]) || 640;
 const height = parseInt(process.argv[3]) || 480;
@@ -47,9 +48,7 @@ let blackFrames = 0;
 let stdinFramesReceived = 0;
 let stdinClosed = false;
 
-console.log('[camera-writer] Starting: ' + width + 'x' + height +
-    ' @' + fps + 'fps → ' + v4l2Device +
-    ' (frame=' + frameSize + 'B, interval=' + INTERVAL_MS + 'ms)');
+log.info({ width, height, fps, v4l2Device, frameBytes: frameSize, intervalMs: INTERVAL_MS }, 'Starting');
 
 // Spawn FFmpeg — runs FOREVER
 const ffmpeg = spawn('ffmpeg', [
@@ -68,22 +67,22 @@ const ffmpeg = spawn('ffmpeg', [
 });
 
 ffmpeg.on('spawn', () => {
-    console.log('[camera-writer] FFmpeg started (PID ' + ffmpeg.pid + ')');
+    log.info({ pid: ffmpeg.pid }, 'FFmpeg started');
 });
 
 ffmpeg.stderr.on('data', (data) => {
     const msg = data.toString().trim();
-    if (msg) console.log('[camera-writer] FFmpeg: ' + msg);
+    if (msg) log.info({ output: msg }, 'FFmpeg');
 });
 
 ffmpeg.on('exit', (code) => {
-    console.log('[camera-writer] FFmpeg exited: code=' + code);
+    log.info({ code }, 'FFmpeg exited');
     clearInterval(writeTimer);
     process.exit(code || 0);
 });
 
 ffmpeg.on('error', (err) => {
-    console.error('[camera-writer] FFmpeg error: ' + err.message);
+    log.error({ err: err.message }, 'FFmpeg error');
     clearInterval(writeTimer);
     process.exit(1);
 });
@@ -104,7 +103,7 @@ process.stdin.on('data', (chunk) => {
 });
 
 process.stdin.on('end', () => {
-    console.log('[camera-writer] stdin EOF — falling back to black frames');
+    log.info('stdin EOF — falling back to black frames');
     stdinClosed = true;
     pendingLiveFrame = null;
 });
@@ -143,7 +142,7 @@ const writeTimer = setInterval(() => {
         ffmpeg.stdin.write(frameToWrite);
         framesWritten++;
     } catch (err) {
-        console.error('[camera-writer] Write error: ' + err.message);
+        log.error({ err: err.message }, 'Write error');
         clearInterval(writeTimer);
         process.exit(1);
     }
@@ -159,17 +158,12 @@ const writeTimer = setInterval(() => {
 
     // Log every 10 seconds
     if (framesWritten % (fps * 10) === 0) {
-        console.log('[camera-writer] total=' + framesWritten +
-            ' real=' + realFrames +
-            ' held=' + held +
-            ' black=' + blackFrames +
-            ' stdinRecv=' + stdinFramesReceived +
-            ' stdinClosed=' + stdinClosed);
+        log.info({ total: framesWritten, real: realFrames, held, black: blackFrames, stdinRecv: stdinFramesReceived, stdinClosed }, 'Frame stats');
     }
 }, INTERVAL_MS);
 
 // Start with black frames immediately (don't wait for stdin)
-console.log('[camera-writer] Writing black frames until real data arrives...');
+log.info('Writing black frames until real data arrives');
 
 process.on('SIGTERM', () => {
     clearInterval(writeTimer);

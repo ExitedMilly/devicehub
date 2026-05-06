@@ -1,6 +1,7 @@
 'use strict';
 
 const walkSimulator = require('../domain/walk-simulator');
+const log = require('../log').getLogger('http/routes-walk');
 const { readJsonBody } = require('./helpers');
 
 function handleWalk(req, res, url) {
@@ -32,7 +33,7 @@ function handleWalk(req, res, url) {
                 res.end(JSON.stringify({ ok: true, serial, status }));
             })
             .catch((err) => {
-                console.error('[walk] start failed:', err.message);
+                log.error({ serial, err: err.message }, 'Walk start failed');
                 res.writeHead(400);
                 res.end(JSON.stringify({ ok: false, error: err.message }));
             });
