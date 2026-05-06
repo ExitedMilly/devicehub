@@ -1,11 +1,10 @@
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const { URL } = require('url');
-const grpc = require('@grpc/grpc-js');
 
-const walkSimulator = require('./walk-simulator');
-const poseScenario = require('./pose-scenario');
-const backupLogical = require('./backup-logical');
+const walkSimulator = require('./domain/walk-simulator');
+const poseScenario = require('./domain/pose-scenario');
+const backupLogical = require('./domain/backup-logical');
 
 const config = require('./config');
 const {
@@ -15,7 +14,6 @@ const {
 } = config;
 const { instances, micRtcInstances, cameraInstances, gpsSessions, poseStates, lightStates } = require('./stores');
 const { emulatorProto, getGrpcAddressFromSerial, callUnaryGrpc } = require('./grpc-client');
-const { runAdb } = require('./adb-runner');
 const { registry } = require('./emulator-registry');
 const { paMonitor } = require('./pulse-monitor');
 const { CaptureInstance } = require('./audio/capture');
@@ -24,6 +22,29 @@ const { cameraStateMonitor } = require('./camera/state-monitor');
 const { stopCameraWriter, startGlobalBlackFeed } = require('./camera/writer');
 const { WebRTCMicrophoneInstance } = require('./mic/webrtc');
 const { CameraInstance } = require('./camera/instance');
+const {
+    normalizeGpsProvider, validateCoordinates, setMockGpsLocation,
+    stopGpsKeepAlive, getGpsSessionsStatus, startGpsKeepAlive,
+} = require('./domain/gps');
+const {
+    validatePoseAngles, getPoseStatesStatus, setDevicePoseRotation,
+} = require('./domain/pose');
+const {
+    validateLightLux, getLightStatesStatus, setDeviceLight,
+} = require('./domain/light');
+
+walkSimulator.init({
+setMockGpsLocation,
+startGpsKeepAlive,
+stopGpsKeepAlive,
+});
+
+poseScenario.init({
+emulatorProto: emulatorProto,
+callUnaryGrpc: callUnaryGrpc,
+getGrpcAddressFromSerial: getGrpcAddressFromSerial,
+setDevicePoseRotation: setDevicePoseRotation,
+});
 
 // ===================== HTTP + WebSocket Server =====================
 function readJsonBody(req) {
@@ -46,442 +67,6 @@ function readJsonBody(req) {
     });
 }
 
-
-function normalizeGpsProvider(provider) {
-    const allowed = new Set(['gps', 'fused', 'network', 'passive']);
-    if (!provider || typeof provider !== 'string') return 'gps';
-    const normalized = provider.trim().toLowerCase();
-    return allowed.has(normalized) ? normalized : 'gps';
-}
-
-function validateCoordinates(latitude, longitude) {
-    const lat = Number(latitude);
-    const lon = Number(longitude);
-
-    if (!Number.isFinite(lat)) {
-        throw new Error('latitude must be a valid number');
-    }
-    if (!Number.isFinite(lon)) {
-        throw new Error('longitude must be a valid number');
-    }
-    if (lat < -90 || lat > 90) {
-        throw new Error('latitude must be between -90 and 90');
-    }
-    if (lon < -180 || lon > 180) {
-        throw new Error('longitude must be between -180 and 180');
-    }
-
-    return { lat, lon };
-}
-
-async function setMockGpsLocation(serial, latitude, longitude, provider = 'gps') {
-    const { lat, lon } = validateCoordinates(latitude, longitude);
-    const normalizedProvider = normalizeGpsProvider(provider);
-
-    console.log(
-        `[gps] Applying mock location to ${serial}: provider=${normalizedProvider}, lat=${lat}, lon=${lon}`
-    );
-
-    await runAdb(serial, ['shell', 'cmd', 'location', 'set-location-enabled', 'true']);
-    await runAdb(serial, ['shell', 'appops', 'set', '2000', 'android:mock_location', 'allow']);
-
-    const addProviderResult = await runAdb(
-        serial,
-        ['shell', 'cmd', 'location', 'providers', 'add-test-provider', normalizedProvider],
-        { allowFailure: true }
-    );
-
-    if (
-        !addProviderResult.ok &&
-        !/already exists|already added|Duplicate/i.test(
-            `${addProviderResult.stderr}\n${addProviderResult.stdout}`
-        )
-    ) {
-        throw new Error(
-            `failed to add test provider "${normalizedProvider}": ` +
-            (addProviderResult.stderr || addProviderResult.stdout || 'unknown error')
-        );
-    }
-
-    await runAdb(serial, [
-        'shell',
-        'cmd',
-        'location',
-        'providers',
-        'set-test-provider-enabled',
-        normalizedProvider,
-        'true',
-    ]);
-
-    // IMPORTANT: cmd location expects LATITUDE,LONGITUDE
-    await runAdb(serial, [
-        'shell',
-        'cmd',
-        'location',
-        'providers',
-        'set-test-provider-location',
-        normalizedProvider,
-        '--location',
-        `${lat},${lon}`,
-    ]);
-
-    return {
-        serial,
-        provider: normalizedProvider,
-        latitude: lat,
-        longitude: lon,
-    };
-}
-
-function stopGpsKeepAlive(serial) {
-    const session = gpsSessions.get(serial);
-    if (!session) return false;
-
-    if (session.timer) {
-        clearInterval(session.timer);
-        session.timer = null;
-    }
-
-    gpsSessions.delete(serial);
-    console.log('[gps] Keepalive stopped for ' + serial);
-    return true;
-}
-
-function getGpsSessionsStatus() {
-    const result = {};
-    for (const [serial, session] of gpsSessions) {
-        result[serial] = {
-            serial: session.serial,
-            provider: session.provider,
-            latitude: session.latitude,
-            longitude: session.longitude,
-            intervalMs: session.intervalMs,
-            startedAt: session.startedAt,
-            lastAppliedAt: session.lastAppliedAt,
-            lastError: session.lastError,
-            running: session.running,
-        };
-    }
-    return result;
-}
-
-async function startGpsKeepAlive(serial, latitude, longitude, provider = 'gps', intervalMs = GPS_KEEPALIVE_INTERVAL_MS) {
-    const { lat, lon } = validateCoordinates(latitude, longitude);
-    const normalizedProvider = normalizeGpsProvider(provider);
-    const normalizedIntervalMs = Number.isFinite(Number(intervalMs)) && Number(intervalMs) >= 5000
-        ? Number(intervalMs)
-        : GPS_KEEPALIVE_INTERVAL_MS;
-
-    stopGpsKeepAlive(serial);
-
-    await setMockGpsLocation(serial, lat, lon, normalizedProvider);
-
-    const session = {
-        serial,
-        provider: normalizedProvider,
-        latitude: lat,
-        longitude: lon,
-        intervalMs: normalizedIntervalMs,
-        timer: null,
-        running: false,
-        startedAt: new Date().toISOString(),
-        lastAppliedAt: new Date().toISOString(),
-        lastError: null,
-    };
-
-    session.timer = setInterval(async () => {
-        if (session.running) return;
-
-        session.running = true;
-        try {
-            await setMockGpsLocation(serial, session.latitude, session.longitude, session.provider);
-            session.lastAppliedAt = new Date().toISOString();
-            session.lastError = null;
-            console.log(
-                '[gps] Keepalive refresh for ' + serial +
-                ': ' + session.latitude + ',' + session.longitude +
-                ' provider=' + session.provider
-            );
-        } catch (err) {
-            session.lastError = err.message;
-            console.error('[gps] Keepalive refresh failed for ' + serial + ': ' + err.message);
-        } finally {
-            session.running = false;
-        }
-    }, session.intervalMs);
-
-    gpsSessions.set(serial, session);
-
-    console.log(
-        '[gps] Keepalive started for ' + serial +
-        ': provider=' + normalizedProvider +
-        ', lat=' + lat +
-        ', lon=' + lon +
-        ', interval=' + normalizedIntervalMs + 'ms'
-    );
-
-    return {
-        serial,
-        provider: normalizedProvider,
-        latitude: lat,
-        longitude: lon,
-        keepAlive: true,
-        intervalMs: normalizedIntervalMs,
-        startedAt: session.startedAt,
-    };
-}
-
-walkSimulator.init({
-setMockGpsLocation,
-startGpsKeepAlive,
-stopGpsKeepAlive,
-});
-
-poseScenario.init({
-emulatorProto: emulatorProto,
-callUnaryGrpc: callUnaryGrpc,
-getGrpcAddressFromSerial: getGrpcAddressFromSerial,
-setDevicePoseRotation: setDevicePoseRotation,
-});
-
-
-function validatePoseAngles(pitch, yaw, roll) {
-    const p = Number(pitch);
-    const y = Number(yaw);
-    const r = Number(roll);
-
-    if (!Number.isFinite(p)) {
-        throw new Error('pitch must be a valid number');
-    }
-    if (!Number.isFinite(y)) {
-        throw new Error('yaw must be a valid number');
-    }
-    if (!Number.isFinite(r)) {
-        throw new Error('roll must be a valid number');
-    }
-
-    if (p < -180 || p > 180) {
-        throw new Error('pitch must be between -180 and 180');
-    }
-    if (y < -180 || y > 180) {
-        throw new Error('yaw must be between -180 and 180');
-    }
-    if (r < -180 || r > 180) {
-        throw new Error('roll must be between -180 and 180');
-    }
-
-    return { pitch: p, yaw: y, roll: r };
-}
-
-function getPoseStatesStatus() {
-    const result = {};
-    for (const [serial, pose] of poseStates) {
-        result[serial] = pose;
-    }
-    return result;
-}
-
-function validateLightLux(lux) {
-    const value = Number(lux);
-
-    if (!Number.isFinite(value)) {
-        throw new Error('lux must be a valid number');
-    }
-    if (value < 0) {
-        throw new Error('lux must be greater than or equal to 0');
-    }
-
-    return value;
-}
-
-function getLightStatesStatus() {
-    const result = {};
-    for (const [serial, light] of lightStates) {
-        result[serial] = light;
-    }
-    return result;
-}
-
-function extractGrpcNumericValue(response) {
-    if (!response || !response.value || !Array.isArray(response.value.data) || response.value.data.length === 0) {
-        return null;
-    }
-
-    const value = Number(response.value.data[0]);
-    return Number.isFinite(value) ? value : null;
-}
-
-function parseAdbLightGetOutput(stdout) {
-    const match = String(stdout || '').match(/light\s*=\s*(-?\d+(?:\.\d+)?)/i);
-    if (!match) return null;
-
-    const value = Number(match[1]);
-    return Number.isFinite(value) ? value : null;
-}
-
-async function getAdbLightValue(serial) {
-    const result = await runAdb(serial, ['emu', 'sensor', 'get', 'light']);
-    return parseAdbLightGetOutput(result.stdout);
-}
-
-async function setDeviceLightViaAdb(serial, lux) {
-    const normalizedLux = validateLightLux(lux);
-
-    await runAdb(serial, ['emu', 'sensor', 'set', 'light', String(normalizedLux)]);
-    const sensorLux = await getAdbLightValue(serial);
-
-    return {
-        appliedVia: 'adbConsole',
-        physicalLux: null,
-        sensorLux: sensorLux,
-    };
-}
-
-async function setDeviceLightViaGrpcPhysicalModel(serial, lux) {
-    if (!emulatorProto) {
-        throw new Error('gRPC proto not loaded');
-    }
-
-    const normalizedLux = validateLightLux(lux);
-    const grpcAddress = getGrpcAddressFromSerial(serial);
-
-    const grpcClient = new emulatorProto.EmulatorController(
-        grpcAddress,
-        grpc.credentials.createInsecure()
-    );
-
-    await callUnaryGrpc(grpcClient, 'setPhysicalModel', {
-        target: 'LIGHT',
-        value: {
-            data: [normalizedLux],
-        },
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
-    const physicalState = await callUnaryGrpc(grpcClient, 'getPhysicalModel', {
-        target: 'LIGHT',
-    });
-
-    const sensorState = await callUnaryGrpc(grpcClient, 'getSensor', {
-        target: 'LIGHT',
-    });
-
-    return {
-        appliedVia: 'physicalModel',
-        physicalLux: extractGrpcNumericValue(physicalState),
-        sensorLux: extractGrpcNumericValue(sensorState),
-    };
-}
-
-async function setDeviceLight(serial, lux) {
-    const normalizedLux = validateLightLux(lux);
-
-    console.log('[light] Applying ambient light to ' + serial + ': lux=' + normalizedLux);
-
-    let appliedVia = null;
-    let physicalLux = null;
-    let sensorLux = null;
-    let fallbackReason = null;
-
-    try {
-        const grpcResult = await setDeviceLightViaGrpcPhysicalModel(serial, normalizedLux);
-        appliedVia = grpcResult.appliedVia;
-        physicalLux = grpcResult.physicalLux;
-        sensorLux = grpcResult.sensorLux;
-
-        const hasAcceptableReadback = [physicalLux, sensorLux].some((value) =>
-            value !== null && Math.abs(value - normalizedLux) <= 0.01
-        );
-
-        if (!hasAcceptableReadback) {
-            throw new Error(
-                'gRPC light readback mismatch: physical=' +
-                String(physicalLux) + ', sensor=' + String(sensorLux)
-            );
-        }
-    } catch (err) {
-        fallbackReason = err.message;
-        console.warn('[light] gRPC path failed for ' + serial + ', falling back to adb emu: ' + err.message);
-
-        const adbResult = await setDeviceLightViaAdb(serial, normalizedLux);
-        appliedVia = adbResult.appliedVia;
-        physicalLux = adbResult.physicalLux;
-        sensorLux = adbResult.sensorLux;
-    }
-
-    const result = {
-        serial: serial,
-        lux: normalizedLux,
-        appliedAt: new Date().toISOString(),
-        appliedVia: appliedVia,
-        physicalLux: physicalLux,
-        sensorLux: sensorLux,
-        fallbackReason: fallbackReason,
-    };
-
-    lightStates.set(serial, result);
-    return result;
-}
-
-async function setDevicePoseRotation(serial, pitch, yaw, roll) {
-    if (!emulatorProto) {
-        throw new Error('gRPC proto not loaded');
-    }
-
-    const normalized = validatePoseAngles(pitch, yaw, roll);
-    const grpcAddress = getGrpcAddressFromSerial(serial);
-
-    console.log(
-        '[pose] Applying rotation to ' + serial +
-        ': pitch=' + normalized.pitch +
-        ', yaw=' + normalized.yaw +
-        ', roll=' + normalized.roll +
-        ' via ' + grpcAddress
-    );
-
-    const grpcClient = new emulatorProto.EmulatorController(
-        grpcAddress,
-        grpc.credentials.createInsecure()
-    );
-
-    await callUnaryGrpc(grpcClient, 'setPhysicalModel', {
-        target: 'ROTATION',
-        value: {
-            data: [normalized.pitch, normalized.yaw, normalized.roll],
-        },
-    });
-
-    // Small delay so readback is more reliable
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    const rotationState = await callUnaryGrpc(grpcClient, 'getPhysicalModel', {
-        target: 'ROTATION',
-    });
-
-    const accelerationState = await callUnaryGrpc(grpcClient, 'getSensor', {
-        target: 'ACCELERATION',
-    });
-
-    const orientationState = await callUnaryGrpc(grpcClient, 'getSensor', {
-        target: 'ORIENTATION',
-    });
-
-    const result = {
-        serial,
-        pitch: normalized.pitch,
-        yaw: normalized.yaw,
-        roll: normalized.roll,
-        appliedAt: new Date().toISOString(),
-        rotation: rotationState && rotationState.value ? rotationState.value.data : null,
-        acceleration: accelerationState && accelerationState.value ? accelerationState.value.data : null,
-        orientation: orientationState && orientationState.value ? orientationState.value.data : null,
-    };
-
-    poseStates.set(serial, result);
-
-    return result;
-}
 
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
