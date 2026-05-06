@@ -5,6 +5,7 @@ const path = require('path');
 const { CAMERA_V4L2_DEVICE, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS } = require('../config');
 
 const fs = require('fs');
+const log = require('../log').getLogger('camera/writer');
 
 let cameraWriterProcess = null;
 
@@ -14,14 +15,13 @@ function startCameraWriter() {
     try {
         require('fs').accessSync(CAMERA_V4L2_DEVICE);
     } catch (err) {
-        console.log('[camera] v4l2 device ' + CAMERA_V4L2_DEVICE + ' not available, skipping camera writer');
+        log.info({ device: CAMERA_V4L2_DEVICE }, 'v4l2 device not available, skipping camera writer');
         return;
     }
 
     const writerPath = path.join(__dirname, '../camera-writer.js');
 
-    console.log('[camera] Starting persistent camera-writer: ' +
-        CAMERA_WIDTH + 'x' + CAMERA_HEIGHT + ' @' + CAMERA_FPS + 'fps → ' + CAMERA_V4L2_DEVICE);
+    log.info({ width: CAMERA_WIDTH, height: CAMERA_HEIGHT, fps: CAMERA_FPS, device: CAMERA_V4L2_DEVICE }, 'Starting persistent camera-writer');
 
     cameraWriterProcess = spawn('node', [
         writerPath,
@@ -37,41 +37,41 @@ function startCameraWriter() {
         const msg = data.toString().trim();
         if (msg) {
             for (const line of msg.split('\n')) {
-                console.log('[camera] ' + line);
+                log.info(line);
             }
         }
     });
 
     cameraWriterProcess.stderr.on('data', (data) => {
         const msg = data.toString().trim();
-        if (msg) console.error('[camera] writer-err: ' + msg);
+        if (msg) log.error({ msg }, 'Camera writer stderr');
     });
 
     cameraWriterProcess.on('spawn', () => {
-        console.log('[camera] Camera writer started (PID ' + cameraWriterProcess.pid + ')');
+        log.info({ pid: cameraWriterProcess.pid }, 'Camera writer started');
     });
 
     cameraWriterProcess.on('exit', (code) => {
-        console.log('[camera] Camera writer exited: code=' + code);
+        log.info({ code }, 'Camera writer exited');
         cameraWriterProcess = null;
         // Auto-restart after 2s
         setTimeout(() => {
             if (!cameraWriterProcess) {
-                console.log('[camera] Auto-restarting camera writer...');
+                log.info('Auto-restarting camera writer');
                 startCameraWriter();
             }
         }, 2000);
     });
 
     cameraWriterProcess.on('error', (err) => {
-        console.error('[camera] Camera writer error: ' + err.message);
+        log.error({ err: err.message }, 'Camera writer error');
         cameraWriterProcess = null;
     });
 }
 
 function stopCameraWriter() {
     if (!cameraWriterProcess) return;
-    console.log('[camera] Stopping camera writer');
+    log.info('Stopping camera writer');
     if (cameraWriterProcess.stdin && !cameraWriterProcess.stdin.destroyed) {
         try { cameraWriterProcess.stdin.end(); } catch (e) { /* ignore */ }
     }

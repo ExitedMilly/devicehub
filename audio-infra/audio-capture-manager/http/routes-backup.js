@@ -1,6 +1,7 @@
 'use strict';
 
 const backupLogical = require('../domain/backup-logical');
+const log = require('../log').getLogger('http/routes-backup');
 
 function handleBackup(req, res, url) {
     const backupRestoreMatch = url.pathname.match(/^\/api\/backup\/(.+)\/restore$/);
@@ -12,7 +13,7 @@ function handleBackup(req, res, url) {
                 res.end(JSON.stringify({ ok: true, report: report }));
             })
             .catch(function(err) {
-                console.error('[restore] Failed for ' + serial + ': ' + err.message);
+                log.error({ serial, err: err.message }, 'Restore failed');
                 res.writeHead(500);
                 res.end(JSON.stringify({ ok: false, error: err.message }));
             });
@@ -42,7 +43,7 @@ function handleBackup(req, res, url) {
                 res.end(JSON.stringify({ ok: true, result: result }));
             })
             .catch(function(err) {
-                console.error('[backup] Failed for ' + serial + ': ' + err.message);
+                log.error({ serial, err: err.message }, 'Backup create failed');
                 res.writeHead(500);
                 res.end(JSON.stringify({ ok: false, error: err.message }));
             });

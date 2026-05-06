@@ -1,6 +1,7 @@
 'use strict';
 
 const { setDeviceLight } = require('../domain/light');
+const log = require('../log').getLogger('http/routes-light');
 const { readJsonBody } = require('./helpers');
 
 function handleLight(req, res, url) {
@@ -19,7 +20,7 @@ function handleLight(req, res, url) {
                 }));
             })
             .catch((err) => {
-                console.error('[light] Failed to apply light:', err.message);
+                log.error({ serial, err: err.message }, 'Failed to apply light');
                 res.writeHead(400);
                 res.end(JSON.stringify({
                     ok: false,

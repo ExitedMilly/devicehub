@@ -5,6 +5,7 @@ const { WebSocket } = require('ws');
 const { MIC_STATE_POLL_MS } = require('../config');
 const { registry } = require('../emulator-registry');
 const { ADB_PORT } = require('../config');
+const log = require('../log').getLogger('mic/state-monitor');
 
 // ===================== Mic State Monitor =====================
 // Polls PulseAudio source-outputs for QEMU Corked state.
@@ -23,7 +24,7 @@ class MicStateMonitor {
     }
 
     start() {
-        console.log('[mic-state] Starting mic state monitor via adb (poll every ' + MIC_STATE_POLL_MS + 'ms)');
+        log.info({ pollMs: MIC_STATE_POLL_MS }, 'Starting mic state monitor via adb');
         this.timer = setInterval(() => this.pollAll(), MIC_STATE_POLL_MS);
         // First poll after a short delay (let emulators boot)
         setTimeout(() => this.pollAll(), 5000);
@@ -51,7 +52,7 @@ class MicStateMonitor {
             try {
                 execSync('adb connect ' + adbTarget + ' 2>/dev/null', { encoding: 'utf8', timeout: 5000 });
                 this.adbConnected.set(serial, true);
-                console.log('[mic-state] adb connected to ' + adbTarget);
+                log.info({ adbTarget }, 'adb connected');
             } catch (err) {
                 // Not ready yet — will retry next poll
                 return;
@@ -121,7 +122,7 @@ class MicStateMonitor {
         const oldState = this.states.get(serial);
         if (oldState !== newState) {
             this.states.set(serial, newState);
-            console.log('[mic-state] ' + serial + ': ' + (oldState || 'unknown') + ' → ' + newState);
+            log.info({ serial, from: oldState || 'unknown', to: newState }, 'Mic state changed');
             this._notifySubscribers(hostname, serial, newState);
         }
     }

@@ -1,5 +1,6 @@
 'use strict';
 
+const log = require('../log').getLogger('mic/webrtc');
 const grpc = require('@grpc/grpc-js');
 const { RTCPeerConnection, RTCSessionDescription } = require('@roamhq/wrtc');
 const { RTCAudioSink } = require('@roamhq/wrtc').nonstandard;
@@ -58,22 +59,19 @@ class WebRTCMicrophoneInstance {
         this.framesReceived = 0;
         this.pcmBuffer = Buffer.alloc(0);
 
-        console.log('[mic-rtc:' + this.serial + '] Browser connected, awaiting WebRTC signaling');
+        log.info({ serial: this.serial }, 'Browser connected, awaiting WebRTC signaling');
 
         ws.on('message', async (data) => {
             try {
                 const msg = JSON.parse(data.toString());
                 await this._handleSignaling(msg);
             } catch (err) {
-                console.error('[mic-rtc:' + this.serial + '] Signaling parse error: ' + err.message);
+                log.error({ serial: this.serial, err: err.message }, 'Signaling parse error');
             }
         });
 
         ws.on('close', (code, reason) => {
-            console.log('[mic-rtc:' + this.serial + '] Browser disconnected (code=' + code +
-                ' reason=' + (reason || 'none') +
-                ' frames=' + this.framesReceived +
-                ' sent=' + this.pcmBytesSent + ')');
+            log.info({ serial: this.serial, code, reason: reason ? String(reason) : 'none', frames: this.framesReceived, sent: this.pcmBytesSent }, 'Browser disconnected');
             this._stopPipeline();
             this.client = null;
             if (this.state !== 'stopped') {
@@ -82,7 +80,7 @@ class WebRTCMicrophoneInstance {
         });
 
         ws.on('error', (err) => {
-            console.error('[mic-rtc:' + this.serial + '] WS error: ' + err.message);
+            log.error({ serial: this.serial, err: err.message }, 'WS error');
             this._stopPipeline();
             this.client = null;
             if (this.state !== 'stopped') {
@@ -99,7 +97,7 @@ class WebRTCMicrophoneInstance {
                 await this.peerConnection.addIceCandidate(msg.candidate);
             }
         } catch (err) {
-            console.error('[mic-rtc:' + this.serial + '] Signaling error: ' + err.message);
+            log.error({ serial: this.serial, err: err.message }, 'Signaling error');
             this.lastError = err.message;
         }
     }
@@ -112,10 +110,10 @@ class WebRTCMicrophoneInstance {
 
     this.grpcCall = grpcClient.injectAudio((err) => {
         if (err) {
-            console.error('[mic-rtc:' + this.serial + '] gRPC injectAudio error: ' + err.message);
+            log.error({ serial: this.serial, err: err.message }, 'gRPC injectAudio error');
             this.lastError = 'gRPC: ' + err.message;
         } else {
-            console.log('[mic-rtc:' + this.serial + '] gRPC injectAudio completed');
+            log.info({ serial: this.serial }, 'gRPC injectAudio completed');
         }
     });
 
@@ -133,18 +131,7 @@ class WebRTCMicrophoneInstance {
         const outSec = (this.audioSamplesOut / SAMPLE_RATE).toFixed(2);
         const sentSec = (this.pcmBytesSent / 2 / SAMPLE_RATE).toFixed(2);
 
-        console.log(
-            '[mic-rtc:' + this.serial + '] DIAG ' +
-            'callbacks=' + this.audioCallbacks +
-            ' inSec=' + inSec +
-            ' outSec=' + outSec +
-            ' sentSec=' + sentSec +
-            ' pcmBuffer=' + this.pcmBuffer.length + 'B' +
-            ' maxBuffer=' + this.maxPcmBufferBytesSeen + 'B' +
-            ' underruns=' + this.grpcUnderruns +
-            ' trimEvents=' + this.bufferTrimEvents +
-            ' trimBytes=' + this.bufferTrimBytes
-        );
+        log.info({ serial: this.serial, callbacks: this.audioCallbacks, inSec, outSec, sentSec, pcmBuffer: this.pcmBuffer.length, maxBuffer: this.maxPcmBufferBytesSeen, underruns: this.grpcUnderruns, trimEvents: this.bufferTrimEvents, trimBytes: this.bufferTrimBytes }, 'DIAG');
     }, 5000);
 
     this.pcmTimer = setInterval(() => {
@@ -160,10 +147,7 @@ class WebRTCMicrophoneInstance {
                 return;
             }
             this.grpcStarted = true;
-            console.log(
-                '[mic-rtc:' + this.serial + '] gRPC sender started with prefill=' +
-                this.pcmBuffer.length + 'B'
-            );
+            log.info({ serial: this.serial, prefillBytes: this.pcmBuffer.length }, 'gRPC sender started');
         }
 
         let sentChunksThisTick = 0;
@@ -187,7 +171,7 @@ class WebRTCMicrophoneInstance {
                     audio: chunk,
                 });
             } catch (err) {
-                console.error('[mic-rtc:' + this.serial + '] gRPC write error: ' + err.message);
+                log.error({ serial: this.serial, err: err.message }, 'gRPC write error');
                 break;
             }
 
@@ -206,10 +190,7 @@ class WebRTCMicrophoneInstance {
             this.bufferTrimEvents++;
             this.bufferTrimBytes += (before - this.pcmBuffer.length);
 
-            console.warn(
-                '[mic-rtc:' + this.serial + '] BUFFER TRIM emergency: ' +
-                before + 'B -> ' + this.pcmBuffer.length + 'B'
-            );
+            log.warn({ serial: this.serial, before, after: this.pcmBuffer.length }, 'BUFFER TRIM emergency');
         }
     }, SEND_MS);
 }
@@ -227,7 +208,7 @@ class WebRTCMicrophoneInstance {
         if (bitsPerSample !== 16) {
             if (!this._warnedBitsPerSample) {
                 this._warnedBitsPerSample = true;
-                console.warn('[mic-rtc:' + this.serial + '] Unsupported bitsPerSample=' + bitsPerSample + ', dropping audio');
+                log.warn({ serial: this.serial, bitsPerSample }, 'Unsupported bitsPerSample, dropping audio');
             }
             return;
         }
@@ -243,11 +224,7 @@ class WebRTCMicrophoneInstance {
         if (this.lastAudioCallbackAt) {
             const delta = now - this.lastAudioCallbackAt;
             if (expectedMs > 0 && delta > expectedMs * 2 + 10) {
-                console.warn(
-                    '[mic-rtc:' + this.serial + '] SINK GAP ' +
-                    'delta=' + delta + 'ms expected≈' + expectedMs + 'ms ' +
-                    'rate=' + sampleRate + 'Hz frames=' + inputFrames
-                );
+                log.warn({ serial: this.serial, deltaMs: delta, expectedMs, sampleRate, frames: inputFrames }, 'SINK GAP');
             }
         }
         this.lastAudioCallbackAt = now;
@@ -256,14 +233,7 @@ class WebRTCMicrophoneInstance {
         this.audioSamplesIn += inputFrames;
 
         if (this.audioCallbacks <= 5) {
-            console.log(
-                '[mic-rtc:' + this.serial + '] AUDIO IN #' + this.audioCallbacks +
-                ' rate=' + sampleRate +
-                'Hz channels=' + channelCount +
-                ' bits=' + bitsPerSample +
-                ' frames=' + inputFrames +
-                ' samplesLen=' + samples.length
-            );
+            log.info({ serial: this.serial, callbackN: this.audioCallbacks, sampleRate, channels: channelCount, bits: bitsPerSample, frames: inputFrames, samplesLen: samples.length }, 'AUDIO IN');
         }
 
         let monoSamples = downmixToMonoInt16(samples, channelCount);
@@ -272,7 +242,7 @@ class WebRTCMicrophoneInstance {
             monoSamples = resampleMonoInt16Nearest(monoSamples, sampleRate, SAMPLE_RATE);
             if (!this._warnedSampleRate) {
                 this._warnedSampleRate = true;
-                console.log('[mic-rtc:' + this.serial + '] Resampling ' + sampleRate + 'Hz → ' + SAMPLE_RATE + 'Hz');
+                log.info({ serial: this.serial, from: sampleRate, to: SAMPLE_RATE }, 'Resampling');
             }
         }
 
@@ -292,15 +262,12 @@ class WebRTCMicrophoneInstance {
             this.bufferTrimEvents++;
             this.bufferTrimBytes += (before - this.pcmBuffer.length);
 
-            console.warn(
-                '[mic-rtc:' + this.serial + '] APPEND emergency trim: ' +
-                before + 'B -> ' + this.pcmBuffer.length + 'B'
-            );
+            log.warn({ serial: this.serial, before, after: this.pcmBuffer.length }, 'APPEND emergency trim');
         }
     }
 
     async _handleOffer(msg) {
-        console.log('[mic-rtc:' + this.serial + '] Received SDP offer');
+        log.info({ serial: this.serial }, 'Received SDP offer');
 
         this._stopPipeline();
         this._startGrpcPipeline();
@@ -335,7 +302,7 @@ class WebRTCMicrophoneInstance {
             const track = event.track;
             if (track.kind !== 'audio') return;
 
-            console.log('[mic-rtc:' + this.serial + '] Audio track received');
+            log.info({ serial: this.serial }, 'Audio track received');
             this.state = 'streaming';
 
             if (this.audioSink) {
@@ -347,13 +314,13 @@ class WebRTCMicrophoneInstance {
             };
 
             track.onended = () => {
-                console.log('[mic-rtc:' + this.serial + '] Audio track ended');
+                log.info({ serial: this.serial }, 'Audio track ended');
             };
         };
 
         this.peerConnection.onconnectionstatechange = () => {
             const state = this.peerConnection ? this.peerConnection.connectionState : 'unknown';
-            console.log('[mic-rtc:' + this.serial + '] Connection state: ' + state);
+            log.info({ serial: this.serial, state }, 'Connection state change');
         };
 
         await this.peerConnection.setRemoteDescription(
@@ -369,13 +336,13 @@ class WebRTCMicrophoneInstance {
                 sdp: this.peerConnection.localDescription.sdp,
             }));
             answerSent = true;
-            console.log('[mic-rtc:' + this.serial + '] Sent SDP answer');
+            log.info({ serial: this.serial }, 'Sent SDP answer');
 
             for (const candidate of pendingCandidates) {
                 this.client.send(candidate);
             }
             if (pendingCandidates.length > 0) {
-                console.log('[mic-rtc:' + this.serial + '] Flushed ' + pendingCandidates.length + ' buffered ICE candidates');
+                log.info({ serial: this.serial, count: pendingCandidates.length }, 'Flushed buffered ICE candidates');
             }
         }
     }
@@ -415,8 +382,7 @@ class WebRTCMicrophoneInstance {
 
     stop() {
         if (this.state === 'stopped') return;
-        console.log('[mic-rtc:' + this.serial + '] Stopping mic WebRTC (received ' +
-            this.bytesReceived + ' PCM bytes, sent ' + this.pcmBytesSent + ' PCM bytes via gRPC)');
+        log.info({ serial: this.serial, received: this.bytesReceived, sent: this.pcmBytesSent }, 'Stopping mic WebRTC');
         this.state = 'stopped';
 
         this._stopPipeline();

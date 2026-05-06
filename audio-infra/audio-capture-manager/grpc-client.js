@@ -4,6 +4,7 @@ const path = require('path');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 const { GRPC_PORT } = require('./config');
+const log = require('./log').getLogger('grpc-client');
 
 const PROTO_PATH = path.join(__dirname, 'emulator_controller.proto');
 let emulatorProto = null;
@@ -17,10 +18,10 @@ try {
     });
     const proto = grpc.loadPackageDefinition(packageDefinition);
     emulatorProto = proto.android.emulation.control;
-    console.log('[grpc] Loaded emulator_controller.proto');
+    log.info('Loaded emulator_controller.proto');
 } catch (err) {
-    console.error('[grpc] Failed to load proto: ' + err.message);
-    console.error('[grpc] Microphone input via gRPC will not be available');
+    log.error({ err: err.message }, 'Failed to load proto');
+    log.error('Microphone input via gRPC will not be available');
 }
 
 function getGrpcAddressFromSerial(serial) {

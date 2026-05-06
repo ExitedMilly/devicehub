@@ -3,6 +3,7 @@
 const { runAdb } = require('../adb-runner');
 const { gpsSessions } = require('../stores');
 const { GPS_KEEPALIVE_INTERVAL_MS } = require('../config');
+const log = require('../log').getLogger('domain/gps');
 
 function normalizeGpsProvider(provider) {
     const allowed = new Set(['gps', 'fused', 'network', 'passive']);
@@ -35,9 +36,7 @@ async function setMockGpsLocation(serial, latitude, longitude, provider = 'gps')
     const { lat, lon } = validateCoordinates(latitude, longitude);
     const normalizedProvider = normalizeGpsProvider(provider);
 
-    console.log(
-        `[gps] Applying mock location to ${serial}: provider=${normalizedProvider}, lat=${lat}, lon=${lon}`
-    );
+    log.info({ serial, provider: normalizedProvider, lat, lon }, 'Applying mock location');
 
     await runAdb(serial, ['shell', 'cmd', 'location', 'set-location-enabled', 'true']);
     await runAdb(serial, ['shell', 'appops', 'set', '2000', 'android:mock_location', 'allow']);
@@ -100,7 +99,7 @@ function stopGpsKeepAlive(serial) {
     }
 
     gpsSessions.delete(serial);
-    console.log('[gps] Keepalive stopped for ' + serial);
+    log.info({ serial }, 'Keepalive stopped');
     return true;
 }
 
@@ -154,14 +153,10 @@ async function startGpsKeepAlive(serial, latitude, longitude, provider = 'gps', 
             await setMockGpsLocation(serial, session.latitude, session.longitude, session.provider);
             session.lastAppliedAt = new Date().toISOString();
             session.lastError = null;
-            console.log(
-                '[gps] Keepalive refresh for ' + serial +
-                ': ' + session.latitude + ',' + session.longitude +
-                ' provider=' + session.provider
-            );
+            log.info({ serial, lat: session.latitude, lon: session.longitude, provider: session.provider }, 'Keepalive refresh');
         } catch (err) {
             session.lastError = err.message;
-            console.error('[gps] Keepalive refresh failed for ' + serial + ': ' + err.message);
+            log.error({ serial, err: err.message }, 'Keepalive refresh failed');
         } finally {
             session.running = false;
         }
@@ -169,13 +164,7 @@ async function startGpsKeepAlive(serial, latitude, longitude, provider = 'gps', 
 
     gpsSessions.set(serial, session);
 
-    console.log(
-        '[gps] Keepalive started for ' + serial +
-        ': provider=' + normalizedProvider +
-        ', lat=' + lat +
-        ', lon=' + lon +
-        ', interval=' + normalizedIntervalMs + 'ms'
-    );
+    log.info({ serial, provider: normalizedProvider, lat, lon, intervalMs: normalizedIntervalMs }, 'Keepalive started');
 
     return {
         serial,

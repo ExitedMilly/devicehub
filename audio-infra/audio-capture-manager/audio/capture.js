@@ -7,6 +7,7 @@ const {
     OPUS_BITRATE, MAX_RESPAWN_DELAY_MS, CLUSTER_ID,
 } = require('../config');
 const { PULSE_SINK_PREFIX } = require('../config');
+const log = require('../log').getLogger('audio/capture');
 
 
 // ===================== CaptureInstance =====================
@@ -38,7 +39,7 @@ class CaptureInstance {
         this.initDone = false;
         this.preClusterBuffer = [];
 
-        console.log('[' + this.serial + '] Starting FFmpeg capture from ' + this.monitorSource);
+        log.info({ serial: this.serial, source: this.monitorSource }, 'Starting FFmpeg capture');
 
         this.ffmpeg = spawn('ffmpeg', [
             '-hide_banner',
@@ -66,7 +67,7 @@ class CaptureInstance {
                     this.initSegment = Buffer.concat(this.preClusterBuffer);
                     this.initDone = true;
                     this.preClusterBuffer = null;
-                    console.log('[' + this.serial + '] WebM init segment captured: ' + this.initSegment.length + ' bytes');
+                    log.info({ serial: this.serial, bytes: this.initSegment.length }, 'WebM init segment captured');
                     this._broadcast(chunk);
                 } else {
                     this.preClusterBuffer.push(Buffer.from(chunk));
@@ -85,7 +86,7 @@ class CaptureInstance {
                     const { paMonitor } = require('../pulse-monitor');
                     paMonitor.trackDtsError(this.serial);
                 } else {
-                    console.log('[' + this.serial + '] FFmpeg: ' + msg);
+                    log.info({ serial: this.serial, output: msg }, 'FFmpeg');
                 }
             }
         });
@@ -94,18 +95,18 @@ class CaptureInstance {
             this.state = 'running';
             this.startedAt = new Date();
             this.respawnCount = 0;
-            console.log('[' + this.serial + '] FFmpeg started (PID ' + this.ffmpeg.pid + ')');
+            log.info({ serial: this.serial, pid: this.ffmpeg.pid }, 'FFmpeg started');
         });
 
         this.ffmpeg.on('error', (err) => {
             this.state = 'error';
             this.lastError = err.message;
-            console.error('[' + this.serial + '] FFmpeg error: ' + err.message);
+            log.error({ serial: this.serial, err: err.message }, 'FFmpeg error');
             this._scheduleRespawn();
         });
 
         this.ffmpeg.on('exit', (code, signal) => {
-            console.log('[' + this.serial + '] FFmpeg exited: code=' + code + ' signal=' + signal);
+            log.info({ serial: this.serial, code, signal }, 'FFmpeg exited');
             this.ffmpeg = null;
             if (this.state !== 'stopped') {
                 this.state = 'error';
@@ -116,7 +117,7 @@ class CaptureInstance {
     }
 
     stop() {
-        console.log('[' + this.serial + '] Stopping capture');
+        log.info({ serial: this.serial }, 'Stopping capture');
         this.state = 'stopped';
         if (this.respawnTimer) { clearTimeout(this.respawnTimer); this.respawnTimer = null; }
         if (this.ffmpeg) {
@@ -130,16 +131,16 @@ class CaptureInstance {
 
     addClient(ws) {
         this.clients.add(ws);
-        console.log('[' + this.serial + '] Client connected (total: ' + this.clients.size + ')');
+        log.info({ serial: this.serial, clients: this.clients.size }, 'Client connected');
 
         if (this.initSegment) {
             ws.send(this.initSegment);
-            console.log('[' + this.serial + '] Sent init segment (' + this.initSegment.length + ' bytes) to new client');
+            log.info({ serial: this.serial, bytes: this.initSegment.length }, 'Sent init segment to new client');
         }
 
         ws.on('close', () => {
             this.clients.delete(ws);
-            console.log('[' + this.serial + '] Client disconnected (total: ' + this.clients.size + ')');
+            log.info({ serial: this.serial, clients: this.clients.size }, 'Client disconnected');
         });
     }
 
@@ -155,7 +156,7 @@ class CaptureInstance {
         if (this.state === 'stopped') return;
         this.respawnCount++;
         const delay = Math.min(1000 * Math.pow(2, this.respawnCount - 1), MAX_RESPAWN_DELAY_MS);
-        console.log('[' + this.serial + '] Respawning in ' + delay + 'ms (attempt ' + this.respawnCount + ')');
+        log.info({ serial: this.serial, delayMs: delay, attempt: this.respawnCount }, 'Respawning');
         this.respawnTimer = setTimeout(() => { this.respawnTimer = null; this.start(); }, delay);
     }
 

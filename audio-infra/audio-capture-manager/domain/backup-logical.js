@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn, execFile } = require('child_process');
+const log = require('../log').getLogger('domain/backup-logical');
 
 const BACKUP_DIR = process.env.BACKUP_DIR || '/backups';
 
@@ -285,7 +286,7 @@ async function createBackup(serial) {
     _activeOps.set(serial, state);
 
     const t0 = Date.now();
-    console.log('[backup] Starting logical backup for ' + serial);
+    log.info({ serial }, 'Starting logical backup');
 
     try { fs.mkdirSync(BACKUP_DIR, { recursive: true }); } catch (e) {}
 
@@ -309,7 +310,7 @@ async function createBackup(serial) {
     try {
         state.stage = 'listing';
         const packages = await listThirdPartyPackages(serial);
-        console.log('[backup] Found ' + packages.length + ' 3rd-party packages');
+        log.info({ serial, count: packages.length }, 'Found 3rd-party packages');
 
         state.stage = 'apks';
         state.totalPackages = packages.length;
@@ -333,7 +334,7 @@ async function createBackup(serial) {
                 }
                 manifest.packages.push(pkgEntry);
             } catch (err) {
-                console.warn('[backup] Failed to pull ' + pkg + ': ' + err.message);
+                log.warn({ serial, pkg, err: err.message }, 'Failed to pull package');
                 manifest.errors.push({ stage: 'apk', package: pkg, error: err.message });
             }
             state.donePackages = i + 1;
@@ -346,9 +347,9 @@ async function createBackup(serial) {
         try {
             const r = await pullSdcardTarball(serial, sdcardTarPath);
             manifest.sdcardTarBytes = r.bytes;
-            console.log('[backup] /sdcard tarball: ' + humanSize(r.bytes));
+            log.info({ serial, size: humanSize(r.bytes) }, '/sdcard tarball done');
         } catch (err) {
-            console.warn('[backup] /sdcard tarball failed: ' + err.message);
+            log.warn({ serial, err: err.message }, '/sdcard tarball failed');
             manifest.errors.push({ stage: 'sdcard', error: err.message });
         }
 
@@ -363,7 +364,7 @@ async function createBackup(serial) {
 
         const finalStat = fs.statSync(outPath);
         const elapsedMs = Date.now() - t0;
-        console.log('[backup] Saved ' + humanSize(finalStat.size) + ' in ' + elapsedMs + 'ms');
+        log.info({ serial, size: humanSize(finalStat.size), elapsedMs }, 'Backup saved');
 
         return {
             serial: serial,
@@ -393,7 +394,7 @@ async function restoreBackup(serial) {
 
     const t0 = Date.now();
     const backupPath = backupFilePath(serial);
-    console.log('[restore] Starting restore for ' + serial + ' from ' + backupPath);
+    log.info({ serial, backupPath }, 'Starting restore');
 
     // Fail fast if file missing / not readable
     if (!fs.existsSync(backupPath)) {
@@ -455,12 +456,12 @@ async function restoreBackup(serial) {
                 continue;
             }
 
-            console.log('[restore] Installing ' + pkg.name + ' (' + apkFiles.length + ' apk' + (apkFiles.length > 1 ? 's' : '') + ')');
+            log.info({ serial, pkg: pkg.name, apkCount: apkFiles.length }, 'Installing package');
             const r = await installApk(serial, apkFiles);
             if (r.ok) {
                 report.packagesInstalled++;
             } else {
-                console.warn('[restore] install failed for ' + pkg.name + ': ' + r.error);
+                log.warn({ serial, pkg: pkg.name, err: r.error }, 'Install failed');
                 report.errors.push({ stage: 'install', package: pkg.name, error: r.error });
                 report.packagesFailed++;
             }
@@ -494,23 +495,21 @@ async function restoreBackup(serial) {
                 if (!pushResult.skipped) {
                     report.sdcardRestored = true;
                 } else {
-                    console.log('[restore] sdcard was empty in backup, nothing to push');
+                    log.info({ serial }, 'sdcard was empty in backup, nothing to push');
                 }
             } catch (err) {
-                console.warn('[restore] /sdcard push failed: ' + err.message);
+                log.warn({ serial, err: err.message }, '/sdcard push failed');
                 report.errors.push({ stage: 'sdcard', error: err.message });
             }
         } else {
-            console.log('[restore] No sdcard.tar in backup, skipping');
+            log.info({ serial }, 'No sdcard.tar in backup, skipping');
         }
 
         const elapsedMs = Date.now() - t0;
         report.elapsedMs = elapsedMs;
         report.finishedAt = new Date().toISOString();
 
-        console.log('[restore] Done for ' + serial + ' in ' + elapsedMs + 'ms, ' +
-            report.packagesInstalled + '/' + packages.length + ' pkgs, ' +
-            'sdcard=' + report.sdcardRestored + ', errors=' + report.errors.length);
+        log.info({ serial, elapsedMs, installed: report.packagesInstalled, total: packages.length, sdcard: report.sdcardRestored, errors: report.errors.length }, 'Restore done');
 
         return report;
     } finally {

@@ -22,6 +22,7 @@
 //   the UI snapshot can never disagree with the actual mock-set location.
 
 const https = require('https');
+const log = require('../log').getLogger('domain/walk-simulator');
 
 // ----- Configuration -----
 const TICK_INTERVAL_MS    = 1000;
@@ -256,18 +257,13 @@ async function startWalk(serial, opts) {
     _stopGpsKeepAlive(serial);
     stopWalk(serial);
 
-    console.log('[walk] Building route for ' + serial + ': ' + stops.length + ' stops, profile=' + profile);
+    log.info({ serial, stops: stops.length, profile }, 'Building route');
     const route = await fetchRoute(stops, profile);
     if (route.points.length < 2) {
         throw new Error('OSRM returned a degenerate route (<2 points)');
     }
     const polyline = buildPolyline(route.points);
-    console.log(
-        '[walk] Route: ' + polyline.points.length + ' pts, ' +
-        'distance=' + Math.round(polyline.total) + 'm, ' +
-        'nominal speed=' + nominalSpeed + ' m/s, ' +
-        'ETA=' + Math.round(polyline.total / nominalSpeed) + 's'
-    );
+    log.info({ serial, points: polyline.points.length, distanceM: Math.round(polyline.total), nominalSpeed, etaSeconds: Math.round(polyline.total / nominalSpeed) }, 'Route built');
 
     const now = Date.now();
     const session = {
@@ -300,7 +296,7 @@ async function startWalk(serial, opts) {
         await _setMockGpsLocation(serial, p0.lat, p0.lon, 'gps');
     } catch (err) {
         session.lastError = err.message;
-        console.error('[walk] Initial location apply failed for ' + serial + ': ' + err.message);
+        log.error({ serial, err: err.message }, 'Initial location apply failed');
     }
 
     session.timer = setInterval(function() { void tick(serial); }, TICK_INTERVAL_MS);
@@ -346,7 +342,7 @@ async function tick(serial) {
         }
     } catch (err) {
         session.lastError = err.message;
-        console.error('[walk] tick failed for ' + serial + ': ' + err.message);
+        log.error({ serial, err: err.message }, 'Tick failed');
     } finally {
         session.applying = false;
     }
@@ -360,17 +356,14 @@ async function finishWalk(serial) {
     session.finishedAt = new Date().toISOString();
 
     const last = session.polyline.points[session.polyline.points.length - 1];
-    console.log(
-        '[walk] Finished ' + serial + ' at ' + last.lat + ',' + last.lon +
-        ' (distance=' + Math.round(session.polyline.total) + 'm)'
-    );
+    log.info({ serial, lat: last.lat, lon: last.lon, distanceM: Math.round(session.polyline.total) }, 'Walk finished');
 
     if (session.keepAliveAfterFinish) {
         try {
             await _startGpsKeepAlive(serial, last.lat, last.lon, 'gps');
-            console.log('[walk] Handed off to GPS keepalive at final point for ' + serial);
+            log.info({ serial }, 'Handed off to GPS keepalive at final point');
         } catch (err) {
-            console.error('[walk] Failed to hand off to keepalive for ' + serial + ': ' + err.message);
+            log.error({ serial, err: err.message }, 'Failed to hand off to keepalive');
         }
     }
 }
@@ -388,15 +381,11 @@ function pauseWalk(serial) {
     const cp = session.currentPoint;
     if (cp && _startGpsKeepAlive) {
         _startGpsKeepAlive(serial, cp.lat, cp.lon, 'gps').catch(function(err) {
-            console.error('[walk] Failed to start pause-keepalive for ' + serial + ': ' + err.message);
+            log.error({ serial, err: err.message }, 'Failed to start pause-keepalive');
         });
     }
 
-    console.log(
-        '[walk] Paused ' + serial +
-        ' (covered=' + Math.round(session.accumulatedDistanceM) + 'm / ' +
-        Math.round(session.polyline.total) + 'm) — keepalive armed'
-    );
+    log.info({ serial, coveredM: Math.round(session.accumulatedDistanceM), totalM: Math.round(session.polyline.total) }, 'Walk paused');
     return true;
 }
 
@@ -414,7 +403,7 @@ function resumeWalk(serial) {
     // the location forward by the entire pause duration.
     session.lastTickAt = Date.now();
     session.timer = setInterval(function() { void tick(serial); }, TICK_INTERVAL_MS);
-    console.log('[walk] Resumed ' + serial);
+    log.info({ serial }, 'Walk resumed');
     return true;
 }
 
@@ -428,7 +417,7 @@ function stopWalk(serial) {
         _stopGpsKeepAlive(serial);
     }
     walkSessions.delete(serial);
-    console.log('[walk] Stopped ' + serial);
+    log.info({ serial }, 'Walk stopped');
     return true;
 }
 

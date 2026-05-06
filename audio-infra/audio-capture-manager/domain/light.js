@@ -4,6 +4,7 @@ const grpc = require('@grpc/grpc-js');
 const { emulatorProto, getGrpcAddressFromSerial, callUnaryGrpc } = require('../grpc-client');
 const { runAdb } = require('../adb-runner');
 const { lightStates } = require('../stores');
+const log = require('../log').getLogger('domain/light');
 
 function validateLightLux(lux) {
     const value = Number(lux);
@@ -101,7 +102,7 @@ async function setDeviceLightViaGrpcPhysicalModel(serial, lux) {
 async function setDeviceLight(serial, lux) {
     const normalizedLux = validateLightLux(lux);
 
-    console.log('[light] Applying ambient light to ' + serial + ': lux=' + normalizedLux);
+    log.info({ serial, lux: normalizedLux }, 'Applying ambient light');
 
     let appliedVia = null;
     let physicalLux = null;
@@ -126,7 +127,7 @@ async function setDeviceLight(serial, lux) {
         }
     } catch (err) {
         fallbackReason = err.message;
-        console.warn('[light] gRPC path failed for ' + serial + ', falling back to adb emu: ' + err.message);
+        log.warn({ serial, err: err.message }, 'gRPC path failed, falling back to adb emu');
 
         const adbResult = await setDeviceLightViaAdb(serial, normalizedLux);
         appliedVia = adbResult.appliedVia;

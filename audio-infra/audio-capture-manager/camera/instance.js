@@ -6,6 +6,7 @@ const { WebSocket } = require('ws');
 const { CAMERA_V4L2_DEVICE, CAMERA_WIDTH, CAMERA_HEIGHT } = require('../config');
 const { scaleYUV420 } = require('./scaler');
 const { writeCameraFrame, getCameraWriterPid } = require('./writer');
+const log = require('../log').getLogger('camera/instance');
 
 class CameraInstance {
     constructor(serial, sinkIndex) {
@@ -41,23 +42,19 @@ class CameraInstance {
         this.framesDropped = 0;
         this.lastError = null;
 
-        console.log('[camera:' + this.serial + '] Browser connected, awaiting WebRTC signaling');
+        log.info({ serial: this.serial }, 'Browser connected, awaiting WebRTC signaling');
 
         ws.on('message', (data) => {
             try {
                 const msg = JSON.parse(data.toString());
                 this._handleSignaling(msg);
             } catch (err) {
-                console.error('[camera:' + this.serial + '] Signaling parse error: ' + err.message);
+                log.error({ serial: this.serial, err: err.message }, 'Signaling parse error');
             }
         });
 
         ws.on('close', (code, reason) => {
-            console.log('[camera:' + this.serial + '] Browser disconnected (code=' + code +
-                ' reason=' + (reason || 'none') +
-                ' frames=' + this.framesReceived +
-                ' written=' + this.framesWritten +
-                ' dropped=' + this.framesDropped + ')');
+            log.info({ serial: this.serial, code, reason: reason ? String(reason) : 'none', frames: this.framesReceived, written: this.framesWritten, dropped: this.framesDropped }, 'Browser disconnected');
             this._stopPipeline();
             this.client = null;
             if (this.state !== 'stopped') {
@@ -67,7 +64,7 @@ class CameraInstance {
         });
 
         ws.on('error', (err) => {
-            console.error('[camera:' + this.serial + '] WS error: ' + err.message);
+            log.error({ serial: this.serial, err: err.message }, 'WS error');
             this._stopPipeline();
             this.client = null;
             if (this.state !== 'stopped') {
@@ -86,13 +83,13 @@ class CameraInstance {
             }
         }
     } catch (err) {
-        console.error('[camera:' + this.serial + '] Signaling error: ' + err.message);
+        log.error({ serial: this.serial, err: err.message }, 'Signaling error');
         this.lastError = err.message;
     }
 }
 
     async _handleOffer(msg) {
-        console.log('[camera:' + this.serial + '] Received SDP offer');
+        log.info({ serial: this.serial }, 'Received SDP offer');
 
         // Close previous WebRTC (but NOT the writer — it stays alive)
         this._stopPipeline();
@@ -127,7 +124,7 @@ class CameraInstance {
             const track = event.track;
             if (track.kind !== 'video') return;
 
-            console.log('[camera:' + this.serial + '] Video track received');
+            log.info({ serial: this.serial }, 'Video track received');
             this.state = 'streaming';
 
             this.videoSink = new RTCVideoSink(track);
@@ -143,9 +140,7 @@ class CameraInstance {
                 } else {
                     frameData = scaleYUV420(frame.data, frame.width, frame.height, CAMERA_WIDTH, CAMERA_HEIGHT);
                     if (this.framesReceived <= 5 || this.framesReceived % 50 === 0) {
-                        console.log('[camera:' + this.serial + '] Scaled ' +
-                            frame.width + 'x' + frame.height + ' → ' +
-                            CAMERA_WIDTH + 'x' + CAMERA_HEIGHT);
+                        log.info({ serial: this.serial, from: frame.width + 'x' + frame.height, to: CAMERA_WIDTH + 'x' + CAMERA_HEIGHT }, 'Scaled frame');
                     }
                 }
 
@@ -154,10 +149,7 @@ class CameraInstance {
                 if (written) {
                     this.framesWritten++;
                     if (this.framesWritten <= 5) {
-                        console.log('[camera:' + this.serial + '] Frame #' + this.framesWritten +
-                            ': ' + frame.width + 'x' + frame.height +
-                            (frame.width !== CAMERA_WIDTH ? ' (scaled)' : '') +
-                            ' dropped=' + this.framesDropped);
+                        log.info({ serial: this.serial, frameN: this.framesWritten, size: frame.width + 'x' + frame.height, scaled: frame.width !== CAMERA_WIDTH, dropped: this.framesDropped }, 'Frame written');
                     }
                 } else {
                     this.framesDropped++;
@@ -167,7 +159,7 @@ class CameraInstance {
 
         this.peerConnection.onconnectionstatechange = () => {
             const state = this.peerConnection ? this.peerConnection.connectionState : 'unknown';
-            console.log('[camera:' + this.serial + '] Connection state: ' + state);
+            log.info({ serial: this.serial, state }, 'Connection state change');
         };
 
         await this.peerConnection.setRemoteDescription(
@@ -183,13 +175,13 @@ class CameraInstance {
                 sdp: this.peerConnection.localDescription.sdp,
             }));
             answerSent = true;
-            console.log('[camera:' + this.serial + '] Sent SDP answer');
+            log.info({ serial: this.serial }, 'Sent SDP answer');
 
             for (const candidate of pendingCandidates) {
                 this.client.send(candidate);
             }
             if (pendingCandidates.length > 0) {
-                console.log('[camera:' + this.serial + '] Flushed ' + pendingCandidates.length + ' buffered ICE candidates');
+                log.info({ serial: this.serial, count: pendingCandidates.length }, 'Flushed buffered ICE candidates');
             }
         }
     }
@@ -211,7 +203,7 @@ class CameraInstance {
 
     stop() {
         if (this.state === 'stopped') return;
-        console.log('[camera:' + this.serial + '] Stopping camera instance');
+        log.info({ serial: this.serial }, 'Stopping camera instance');
         this.state = 'stopped';
         this._stopPipeline();
         if (this.client) {

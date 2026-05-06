@@ -6,6 +6,7 @@ const { instances } = require('./stores');
 const { registry } = require('./emulator-registry');
 const { CaptureInstance } = require('./audio/capture');
 const { PULSE_SINK_PREFIX } = require('./config');
+const log = require('./log').getLogger('pulse-monitor');
 
 // ===================== PA Monitor =====================
 // Polls PulseAudio for QEMU sink-inputs, auto-routes and auto-starts capture
@@ -19,10 +20,10 @@ class PAMonitor {
 
     start() {
         if (!AUTO_DISCOVER) {
-            console.log('[pa-monitor] Auto-discovery disabled');
+            log.info('Auto-discovery disabled');
             return;
         }
-        console.log('[pa-monitor] Starting auto-discovery (poll every ' + PA_POLL_INTERVAL_MS + 'ms)');
+        log.info({ pollMs: PA_POLL_INTERVAL_MS }, 'Starting auto-discovery');
         this.timer = setInterval(() => this.poll(), PA_POLL_INTERVAL_MS);
         // First poll immediately
         setTimeout(() => this.poll(), 1000);
@@ -62,7 +63,7 @@ class PAMonitor {
                 const info = this.knownSinkInputs.get(input.id);
                 const inst = instances.get(info.serial);
                 if (!inst || inst.state !== "running") {
-                    console.log("[pa-monitor] Capture not running for known input #" + input.id + ", restarting");
+                    log.info({ inputId: input.id }, 'Capture not running for known input, restarting');
                     this.knownSinkInputs.delete(input.id);
                     this.onNewQemu(input);
                 }
@@ -82,9 +83,7 @@ class PAMonitor {
         const info = registry.resolve(hostname);
         const targetSink = PULSE_SINK_PREFIX + info.sinkIndex;
 
-        console.log('[pa-monitor] New QEMU detected: sink-input #' + input.id +
-            ' from ' + hostname + ' → routing to ' + targetSink +
-            ', serial=' + info.serial);
+        log.info({ inputId: input.id, hostname, targetSink, serial: info.serial }, 'New QEMU detected');
 
         this.knownSinkInputs.set(input.id, {
             hostname: hostname,
@@ -99,17 +98,17 @@ class PAMonitor {
                     'pactl --server="' + PA_SERVER + '" move-sink-input ' + input.id + ' ' + targetSink,
                     { timeout: 3000 }
                 );
-                console.log('[pa-monitor] Routed sink-input #' + input.id + ' to ' + targetSink);
+                log.info({ inputId: input.id, targetSink }, 'Routed sink-input');
             } catch (err) {
-                console.error('[pa-monitor] Failed to route sink-input #' + input.id + ': ' + err.message);
+                log.error({ inputId: input.id, err: err.message }, 'Failed to route sink-input');
             }
         } else {
-            console.log('[pa-monitor] Sink-input #' + input.id + ' already on ' + targetSink);
+            log.info({ inputId: input.id, targetSink }, 'Sink-input already on target');
         }
 
         // 2. Auto-start capture if not already running
         if (!instances.has(info.serial) || instances.get(info.serial).state !== 'running') {
-            console.log('[pa-monitor] Auto-starting capture for ' + info.serial);
+            log.info({ serial: info.serial }, 'Auto-starting capture');
             const instance = new CaptureInstance(info.serial, info.sinkIndex);
             instances.set(info.serial, instance);
             instance.start();
@@ -117,8 +116,7 @@ class PAMonitor {
     }
 
     onRemovedQemu(id, info) {
-        console.log('[pa-monitor] QEMU disconnected: sink-input #' + id +
-            ' (serial=' + info.serial + ')');
+        log.info({ inputId: id, serial: info.serial }, 'QEMU disconnected');
         this.knownSinkInputs.delete(id);
 
         // Check if any other sink-inputs exist for this serial
@@ -134,7 +132,7 @@ class PAMonitor {
             // No more QEMU inputs for this emulator — stop capture
             const instance = instances.get(info.serial);
             if (instance) {
-                console.log('[pa-monitor] Auto-stopping capture for ' + info.serial);
+                log.info({ serial: info.serial }, 'Auto-stopping capture');
                 instance.stop();
                 instances.delete(info.serial);
             }
@@ -151,7 +149,7 @@ class PAMonitor {
             this.dtsErrorCounts.set(serial, 0);
             const instance = instances.get(serial);
             if (instance && instance.state === 'running') {
-                console.log('[pa-monitor] Too many DTS errors for ' + serial + ', restarting capture');
+                log.info({ serial }, 'Too many DTS errors, restarting capture');
                 instance.stop();
                 setTimeout(() => {
                     if (instances.has(serial)) {
