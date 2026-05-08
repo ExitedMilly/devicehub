@@ -5,7 +5,7 @@ const grpc = require('@grpc/grpc-js');
 const { RTCPeerConnection, RTCSessionDescription } = require('@roamhq/wrtc');
 const { RTCAudioSink } = require('@roamhq/wrtc').nonstandard;
 const { WebSocket } = require('ws');
-const { GRPC_PORT, SAMPLE_RATE, CHANNELS } = require('../config');
+const { GRPC_PORT, SAMPLE_RATE, CHANNELS, WEBRTC_PORT_MIN, WEBRTC_PORT_MAX } = require('../config');
 const { emulatorProto } = require('../grpc-client');
 const { int16ArrayToBuffer, downmixToMonoInt16, resampleMonoInt16Nearest } = require('../audio/helpers');
 
@@ -276,7 +276,7 @@ class WebRTCMicrophoneInstance {
             iceServers: [
                 { urls: 'stun:stun.cloudflare.com:3478' },
             ],
-            portRange: { min: 40000, max: 40010 },
+            portRange: { min: WEBRTC_PORT_MIN, max: WEBRTC_PORT_MAX },
         });
 
         this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });

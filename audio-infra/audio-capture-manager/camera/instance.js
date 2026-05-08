@@ -3,7 +3,7 @@
 const { RTCPeerConnection, RTCSessionDescription } = require('@roamhq/wrtc');
 const { RTCVideoSink } = require('@roamhq/wrtc').nonstandard;
 const { WebSocket } = require('ws');
-const { CAMERA_V4L2_DEVICE, CAMERA_WIDTH, CAMERA_HEIGHT } = require('../config');
+const { CAMERA_V4L2_DEVICE, CAMERA_WIDTH, CAMERA_HEIGHT, WEBRTC_PORT_MIN, WEBRTC_PORT_MAX } = require('../config');
 const { scaleYUV420 } = require('./scaler');
 const { writeCameraFrame, getCameraWriterPid } = require('./writer');
 const log = require('../log').getLogger('camera/instance');
@@ -98,7 +98,7 @@ class CameraInstance {
             iceServers: [
                 { urls: 'stun:stun.cloudflare.com:3478' },
             ],
-            portRange: { min: 40000, max: 40010 },
+            portRange: { min: WEBRTC_PORT_MIN, max: WEBRTC_PORT_MAX },
         });
 
         this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
