@@ -1,0 +1,45 @@
+# instances.yaml — committed to git, describes topology of N instances.
+# Host-specific paths and overrides go to instances.local.env.
+
+defaults:
+  pulse_volume: devicehub_pulse-sock      # Docker volume name
+  docker_network: devicehub_devicehub     # Docker network name
+  capture_image: audio-capture-mgr        # locally-built image
+  emulator_image: budtmo/docker-android:emulator_13.0
+  emulator_device: "Samsung Galaxy S10"
+
+instances:
+  - name: test1
+    # name → container names: emulator-{name}, audio-capture-mgr-{name}
+    # name → INSTANCE_SERIAL: emulator-{name}:5555
+    serial: "emulator-test1:5555"
+    pulse_sink: emu_audio_2
+    pulse_source: emu_mic_2
+    v4l2_device: /dev/video21
+    manager_port: 7601
+    adb_port: 5557
+    vnc_port: 6081
+    webrtc_udp_min: 40020
+    webrtc_udp_max: 40030
+
+  - name: test2
+    serial: "emulator-test2:5555"
+    pulse_sink: emu_audio_3
+    pulse_source: emu_mic_3
+    v4l2_device: /dev/video22
+    manager_port: 7602
+    adb_port: 5558
+    vnc_port: 6082
+    webrtc_udp_min: 40040
+    webrtc_udp_max: 40050
+
+  - name: test3
+    serial: "emulator-test3:5555"
+    pulse_sink: emu_audio_4
+    pulse_source: emu_mic_4
+    v4l2_device: /dev/video23
+    manager_port: 7603
+    adb_port: 5559
+    vnc_port: 6083
+    webrtc_udp_min: 40060
+    webrtc_udp_max: 40070

@@ -1,0 +1,27 @@
+#!/bin/bash
+# down-instance.sh — tear down a single instance.
+# AUTO-GENERATED from instances.yaml. Do not edit by hand.
+# Generated for: {{ instance.name }}
+
+set -uo pipefail
+
+readonly EMULATOR_NAME="emulator-{{ instance.name }}"
+readonly CAPTURE_NAME="audio-capture-mgr-{{ instance.name }}"
+
+# Disconnect adb if adbd is running
+if docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^adbd$'; then
+    echo "[{{ instance.name }}] Disconnecting adb..."
+    docker compose -f docker-compose-prod.yaml --env-file scripts/variables.env exec -T adbd \
+        adb disconnect "${EMULATOR_NAME}:5555" 2>/dev/null || true
+fi
+
+# Stop containers in reverse order (emulator first to avoid pulse errors)
+for c in "$EMULATOR_NAME" "$CAPTURE_NAME"; do
+    if docker ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q "^${c}$"; then
+        echo "[{{ instance.name }}] Stopping $c..."
+        docker stop "$c" >/dev/null 2>&1 || true
+        docker rm   "$c" >/dev/null 2>&1 || true
+    fi
+done
+
+echo "[{{ instance.name }}] Done."

@@ -1,0 +1,11 @@
+# nginx-map.conf — per-serial routing map for capture-mgr instances.
+# AUTO-GENERATED from instances.yaml. Do not edit by hand.
+# Included from main nginx.conf via:
+#   include /etc/nginx/conf.d/devicehub-instances.conf;
+
+map $request_uri $capture_upstream {
+    default                                                                                            "172.20.0.1:7600";
+{% for instance in instances %}
+    "~^/(?:audio|mic-rtc|mic-state|camera|camera-state|manager-api/[^/]+)/{{ instance.serial.split(':')[0] | replace('-', '\\-') | replace('.', '\\.') }}(?::|%3[Aa]){{ instance.serial.split(':')[1] }}(?:/|$|\?)"  "audio-capture-mgr-{{ instance.name }}:{{ instance.manager_port }}";
+{% endfor %}
+}
