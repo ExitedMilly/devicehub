@@ -3,7 +3,7 @@
 const path = require('path');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
-const { GRPC_PORT } = require('./config');
+const { GRPC_PORT, SINGLE_MODE, EMULATOR_GRPC_HOST } = require('./config');
 const log = require('./log').getLogger('grpc-client');
 
 const PROTO_PATH = path.join(__dirname, 'emulator_controller.proto');
@@ -25,6 +25,9 @@ try {
 }
 
 function getGrpcAddressFromSerial(serial) {
+    if (SINGLE_MODE && EMULATOR_GRPC_HOST) {
+        return EMULATOR_GRPC_HOST + ':' + GRPC_PORT;
+    }
     const hostname = serial.split(':')[0];
     return hostname + ':' + GRPC_PORT;
 }

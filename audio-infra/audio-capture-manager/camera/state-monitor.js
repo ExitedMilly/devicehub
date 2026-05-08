@@ -2,9 +2,8 @@
 
 const { execSync } = require('child_process');
 const { WebSocket } = require('ws');
-const { CAMERA_STATE_POLL_MS } = require('../config');
+const { CAMERA_STATE_POLL_MS, ADB_PORT, SINGLE_MODE, EMULATOR_ADB_HOST } = require('../config');
 const { registry } = require('../emulator-registry');
-const { ADB_PORT } = require('../config');
 const log = require('../log').getLogger('camera/state-monitor');
 
 // ===================== Camera State Monitor =====================
@@ -40,7 +39,9 @@ class CameraStateMonitor {
     }
 
     pollEmulator(hostname, serial) {
-        const adbTarget = hostname + ':' + ADB_PORT;;
+        const adbTarget = (SINGLE_MODE && EMULATOR_ADB_HOST)
+            ? EMULATOR_ADB_HOST + ':' + ADB_PORT
+            : hostname + ':' + ADB_PORT;
         try {
             const output = execSync(
                 'adb -s ' + adbTarget + ' shell "dumpsys media.camera" 2>/dev/null',

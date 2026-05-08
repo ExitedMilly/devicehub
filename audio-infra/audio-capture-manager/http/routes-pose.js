@@ -4,6 +4,7 @@ const poseScenario = require('../domain/pose-scenario');
 const log = require('../log').getLogger('http/routes-pose');
 const { setDevicePoseRotation } = require('../domain/pose');
 const { readJsonBody } = require('./helpers');
+const { isSerialAllowed, INSTANCE_SERIAL } = require('../config');
 
 function handlePose(req, res, url) {
     if (req.method === 'GET' && url.pathname === '/api/pose/scenario/list') {
@@ -28,6 +29,12 @@ function handlePose(req, res, url) {
     const poseScStatusOneMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/status$/);
     if (req.method === 'GET' && poseScStatusOneMatch) {
         const serial = decodeURIComponent(poseScStatusOneMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         const status = poseScenario.getStatus(serial);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true, serial: serial, status: status }));
@@ -37,6 +44,12 @@ function handlePose(req, res, url) {
     const poseScStartMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/start$/);
     if (req.method === 'POST' && poseScStartMatch) {
         const serial = decodeURIComponent(poseScStartMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         readJsonBody(req)
             .then(async (body) => {
                 const status = await poseScenario.startScenario(serial, body || {});
@@ -54,6 +67,12 @@ function handlePose(req, res, url) {
     const poseScPauseMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/pause$/);
     if (req.method === 'POST' && poseScPauseMatch) {
         const serial = decodeURIComponent(poseScPauseMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         const ok = poseScenario.pauseScenario(serial);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true, serial: serial, paused: ok, status: poseScenario.getStatus(serial) }));
@@ -63,6 +82,12 @@ function handlePose(req, res, url) {
     const poseScResumeMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/resume$/);
     if (req.method === 'POST' && poseScResumeMatch) {
         const serial = decodeURIComponent(poseScResumeMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         const ok = poseScenario.resumeScenario(serial);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true, serial: serial, resumed: ok, status: poseScenario.getStatus(serial) }));
@@ -72,6 +97,12 @@ function handlePose(req, res, url) {
     const poseScStopMatch = url.pathname.match(/^\/api\/pose\/(.+)\/scenario\/stop$/);
     if (req.method === 'POST' && poseScStopMatch) {
         const serial = decodeURIComponent(poseScStopMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         const stopped = poseScenario.stopScenario(serial);
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true, serial: serial, stopped: stopped }));
@@ -81,6 +112,12 @@ function handlePose(req, res, url) {
     const poseMatch = url.pathname.match(/^\/api\/pose\/(.+)$/);
     if (req.method === 'POST' && poseMatch) {
         const serial = decodeURIComponent(poseMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
         poseScenario.stopScenario(serial);
 
         readJsonBody(req)

@@ -10,6 +10,7 @@ const {
     MANAGER_PORT, PA_SERVER, MIC_PIPE_DIR,
     MIC_STATE_POLL_MS, CAMERA_V4L2_DEVICE,
     GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
+    SINGLE_MODE, INSTANCE_SERIAL, EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
 } = config;
 const { instances, micRtcInstances, cameraInstances, gpsSessions } = require('./stores');
 const { emulatorProto, getGrpcAddressFromSerial, callUnaryGrpc } = require('./grpc-client');
@@ -22,6 +23,8 @@ const {
 } = require('./domain/gps');
 const { setDevicePoseRotation } = require('./domain/pose');
 
+const { registry } = require('./emulator-registry');
+const { CaptureInstance } = require('./audio/capture');
 const { server } = require('./http/server');
 const { attachWsServer } = require('./ws/server');
 
@@ -43,6 +46,12 @@ attachWsServer(server);
 // ===================== Startup =====================
 
 server.listen(MANAGER_PORT, '0.0.0.0', () => {
+    log.info({
+        singleMode: SINGLE_MODE,
+        instanceSerial: INSTANCE_SERIAL,
+        emulatorAdbHost: EMULATOR_ADB_HOST,
+        emulatorGrpcHost: EMULATOR_GRPC_HOST,
+    }, SINGLE_MODE ? 'Running in SINGLE-INSTANCE mode' : 'Running in MULTI-INSTANCE mode (legacy)');
     log.info({ port: MANAGER_PORT }, 'Listening on port');
     log.info({ paServer: PA_SERVER }, 'PA_SERVER');
     log.info({ autoDiscover: AUTO_DISCOVER }, 'AUTO_DISCOVER');
@@ -77,6 +86,17 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
 
     // Start black feed on v4l2loopback to keep camera alive for emulators
     startGlobalBlackFeed();
+
+    // In single mode, manually bootstrap CaptureInstance since PAMonitor
+    // auto-discovery is disabled.
+    if (SINGLE_MODE) {
+        const hostname = INSTANCE_SERIAL.split(':')[0];
+        const info = registry.resolve(hostname);
+        log.info({ serial: INSTANCE_SERIAL, sinkIndex: info.sinkIndex }, 'Bootstrapping CaptureInstance for single mode');
+        const instance = new CaptureInstance(INSTANCE_SERIAL, info.sinkIndex);
+        instances.set(INSTANCE_SERIAL, instance);
+        instance.start();
+    }
 });
 
 process.on('SIGTERM', () => {

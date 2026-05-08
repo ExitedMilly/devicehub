@@ -2,9 +2,8 @@
 
 const { execSync } = require('child_process');
 const { WebSocket } = require('ws');
-const { MIC_STATE_POLL_MS } = require('../config');
+const { MIC_STATE_POLL_MS, ADB_PORT, SINGLE_MODE, EMULATOR_ADB_HOST } = require('../config');
 const { registry } = require('../emulator-registry');
-const { ADB_PORT } = require('../config');
 const log = require('../log').getLogger('mic/state-monitor');
 
 // ===================== Mic State Monitor =====================
@@ -45,7 +44,9 @@ class MicStateMonitor {
     }
 
     pollEmulator(hostname, serial) {
-        const adbTarget = hostname + ':' + ADB_PORT;;
+        const adbTarget = (SINGLE_MODE && EMULATOR_ADB_HOST)
+            ? EMULATOR_ADB_HOST + ':' + ADB_PORT
+            : hostname + ':' + ADB_PORT;
 
         // Ensure adb is connected to this emulator
         if (!this.adbConnected.get(serial)) {
