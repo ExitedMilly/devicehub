@@ -26,3 +26,5 @@ diagnose-audio.sh
 
 # Local instance configuration (host-specific paths)
 scripts/instances.local.env
+# Generated bring-up artifacts (produced by scripts/generate.py)
+scripts/generated/

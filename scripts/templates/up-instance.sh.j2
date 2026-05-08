@@ -1,0 +1,94 @@
+#!/bin/bash
+# up-instance.sh — bring up a single instance.
+# AUTO-GENERATED from instances.yaml. Do not edit by hand.
+# Generated for: {{ instance.name }}
+
+set -euo pipefail
+
+readonly EMULATOR_NAME="emulator-{{ instance.name }}"
+readonly CAPTURE_NAME="audio-capture-mgr-{{ instance.name }}"
+
+# Stop any previous container with the same name
+docker stop "$EMULATOR_NAME" "$CAPTURE_NAME" 2>/dev/null || true
+docker rm   "$EMULATOR_NAME" "$CAPTURE_NAME" 2>/dev/null || true
+
+mkdir -p "{{ env.BACKUPS_DIR }}"
+chmod 777 "{{ env.BACKUPS_DIR }}" 2>/dev/null || true
+
+echo "[{{ instance.name }}] Starting capture-mgr..."
+docker run -d \
+    --name "$CAPTURE_NAME" \
+    --network "{{ defaults.docker_network }}" \
+    --group-add video \
+    -e MANAGER_PORT="{{ instance.manager_port }}" \
+    -e PA_SERVER="unix:/run/pulse/shared.sock" \
+    -e INSTANCE_SERIAL="{{ instance.serial }}" \
+    -e PULSE_SINK_NAME="{{ instance.pulse_sink }}" \
+    -e PULSE_SOURCE_NAME="{{ instance.pulse_source }}" \
+    -e EMULATOR_ADB_HOST="$EMULATOR_NAME" \
+    -e EMULATOR_GRPC_HOST="$EMULATOR_NAME" \
+    -e CAMERA_V4L2_DEVICE="/dev/video0" \
+    -e WEBRTC_PORT_MIN="{{ instance.webrtc_udp_min }}" \
+    -e WEBRTC_PORT_MAX="{{ instance.webrtc_udp_max }}" \
+    -e BACKUP_DIR="/backups" \
+    -e LOG_PRETTY="${LOG_PRETTY:-1}" \
+    -v "{{ defaults.pulse_volume }}:/run/pulse" \
+    -v "{{ env.BACKUPS_DIR }}:/backups" \
+    --device "{{ instance.v4l2_device }}:/dev/video0" \
+    -p "{{ instance.manager_port }}:{{ instance.manager_port }}" \
+    -p "{{ instance.webrtc_udp_min }}-{{ instance.webrtc_udp_max }}:{{ instance.webrtc_udp_min }}-{{ instance.webrtc_udp_max }}/udp" \
+    --restart unless-stopped \
+    "{{ defaults.capture_image }}"
+
+echo "[{{ instance.name }}] Waiting for capture-mgr to settle..."
+sleep 5
+
+if ! docker ps --filter "name=$CAPTURE_NAME" --format '{{ '{{' }}.Status{{ '}}' }}' | grep -q "^Up"; then
+    echo "[{{ instance.name }}] ERROR: $CAPTURE_NAME not running. Logs:"
+    docker logs "$CAPTURE_NAME" 2>&1 | tail -30
+    exit 1
+fi
+
+echo "[{{ instance.name }}] Starting emulator..."
+docker run -d \
+    --name "$EMULATOR_NAME" \
+    --hostname "$EMULATOR_NAME" \
+    --network "{{ defaults.docker_network }}" \
+    --device /dev/kvm \
+    --device "{{ instance.v4l2_device }}:/dev/video0" \
+    --group-add video \
+    -e EMULATOR_DEVICE="{{ defaults.emulator_device }}" \
+    -e WEB_VNC=true \
+    -e PULSE_SERVER="unix:/run/pulse/shared.sock" \
+    -e PULSE_SINK="{{ instance.pulse_sink }}" \
+    -e PULSE_SOURCE="{{ instance.pulse_source }}" \
+    -e QEMU_AUDIO_DRV=pa \
+    -e EMULATOR_ADDITIONAL_ARGS="-allow-host-audio -grpc 8554 -camera-front webcam0" \
+    -v "{{ defaults.pulse_volume }}:/run/pulse" \
+    -p "{{ instance.vnc_port }}:6080" \
+    -p "{{ instance.adb_port }}:5555" \
+    --restart unless-stopped \
+    "{{ defaults.emulator_image }}"
+
+echo "[{{ instance.name }}] Waiting for emulator boot (up to 2 minutes)..."
+for i in $(seq 1 24); do
+    if docker exec "$EMULATOR_NAME" adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
+        echo "[{{ instance.name }}] Emulator boot completed!"
+        break
+    fi
+    echo "[{{ instance.name }}] ... still booting ($((i*5))s elapsed)"
+    sleep 5
+done
+
+# Connect adbd from devicehub stack so the device appears in UI
+if docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^adbd$'; then
+    echo "[{{ instance.name }}] Connecting adbd to $EMULATOR_NAME..."
+    docker compose -f docker-compose-prod.yaml --env-file scripts/variables.env exec -T adbd \
+        adb connect "${EMULATOR_NAME}:5555" 2>&1 || \
+        echo "[{{ instance.name }}] WARN: adb connect failed"
+fi
+
+echo "[{{ instance.name }}] Ready:"
+echo "  Manager API:   http://localhost:{{ instance.manager_port }}/api/health"
+echo "  Emulator VNC:  http://localhost:{{ instance.vnc_port }}/"
+echo "  ADB:           adb connect localhost:{{ instance.adb_port }}"

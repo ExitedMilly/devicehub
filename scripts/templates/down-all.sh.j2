@@ -1,0 +1,15 @@
+#!/bin/bash
+# down-all.sh — tear down all instances.
+# AUTO-GENERATED from instances.yaml. Do not edit by hand.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Stop in reverse order
+{% for instance in instances|reverse %}
+echo "[down-all] Tearing down: {{ instance.name }}"
+"$SCRIPT_DIR/down-{{ instance.name }}.sh"
+
+{% endfor %}
+echo "[down-all] All instances stopped."

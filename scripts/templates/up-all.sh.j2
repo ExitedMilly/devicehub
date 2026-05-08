@@ -1,0 +1,25 @@
+#!/bin/bash
+# up-all.sh — bring up all instances sequentially.
+# AUTO-GENERATED from instances.yaml. Do not edit by hand.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Run host preflight
+"$REPO_ROOT/scripts/host-setup.sh" || {
+    echo "[up-all] Host preflight failed"
+    exit 1
+}
+
+{% for instance in instances %}
+echo "================================================"
+echo "[up-all] Bringing up: {{ instance.name }}"
+echo "================================================"
+"$SCRIPT_DIR/up-{{ instance.name }}.sh"
+
+{% endfor %}
+echo "================================================"
+echo "[up-all] All {{ instances|length }} instances brought up."
+echo "================================================"

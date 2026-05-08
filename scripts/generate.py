@@ -3,12 +3,9 @@
 generate.py — validate instances.yaml + instances.local.env, produce
 bring-up artifacts.
 
-Currently implemented (PR 1): parse + validate, no artifact generation.
-Planned (PR 2): write up-all.sh, down-all.sh, nginx.conf.
-
 Usage:
-    ./generate.py             # validate (PR 1) / generate (PR 2+)
-    ./generate.py --check     # validate only, no writes (PR 2+)
+    ./generate.py             # validate + generate artifacts
+    ./generate.py --check     # validate only, no writes
 """
 
 import sys
@@ -24,6 +21,16 @@ except ImportError:
     print("ERROR: PyYAML not installed.", file=sys.stderr)
     print("Install via: sudo apt install python3-yaml", file=sys.stderr)
     sys.exit(1)
+
+try:
+    from jinja2 import Environment, FileSystemLoader, StrictUndefined
+except ImportError:
+    print("ERROR: Jinja2 not installed.", file=sys.stderr)
+    print("Install via: sudo apt install python3-jinja2", file=sys.stderr)
+    sys.exit(1)
+
+GENERATED_DIR_NAME = 'generated'
+TEMPLATES_DIR_NAME = 'templates'
 
 
 @dataclass
@@ -221,16 +228,89 @@ def validate(config: Config) -> list:
 
 
 # ============================================================
+# Generation
+# ============================================================
+
+def get_known_outputs(instances: list) -> list:
+    """Files that generate.py owns and may delete/rewrite."""
+    files = ['up-all.sh', 'down-all.sh', 'devicehub-instances.conf']
+    for inst in instances:
+        files.append(f'up-{inst.name}.sh')
+        files.append(f'down-{inst.name}.sh')
+    return files
+
+
+def cleanup_generated(generated_dir: Path, known_files: list) -> None:
+    """Remove only files we know we generated. Leaves user files alone."""
+    if not generated_dir.exists():
+        return
+    for fname in known_files:
+        fpath = generated_dir / fname
+        if fpath.exists():
+            fpath.unlink()
+
+
+def generate_artifacts(config: Config, scripts_dir: Path) -> None:
+    """Render all templates and write to scripts/generated/."""
+    templates_dir = scripts_dir / TEMPLATES_DIR_NAME
+    generated_dir = scripts_dir / GENERATED_DIR_NAME
+
+    cleanup_generated(generated_dir, get_known_outputs(config.instances))
+    generated_dir.mkdir(exist_ok=True)
+
+    jinja_env = Environment(
+        loader=FileSystemLoader(str(templates_dir)),
+        undefined=StrictUndefined,
+        keep_trailing_newline=True,
+    )
+
+    # Per-instance scripts
+    up_tmpl = jinja_env.get_template('up-instance.sh.j2')
+    down_tmpl = jinja_env.get_template('down-instance.sh.j2')
+
+    for inst in config.instances:
+        ctx = {'instance': inst, 'defaults': config.defaults, 'env': config.env}
+
+        up_path = generated_dir / f'up-{inst.name}.sh'
+        up_path.write_text(up_tmpl.render(**ctx))
+        up_path.chmod(0o755)
+
+        down_path = generated_dir / f'down-{inst.name}.sh'
+        down_path.write_text(down_tmpl.render(**ctx))
+        down_path.chmod(0o755)
+
+    # Aggregator scripts
+    for tmpl_name, out_name in [
+        ('up-all.sh.j2', 'up-all.sh'),
+        ('down-all.sh.j2', 'down-all.sh'),
+    ]:
+        tmpl = jinja_env.get_template(tmpl_name)
+        out = generated_dir / out_name
+        out.write_text(tmpl.render(instances=config.instances))
+        out.chmod(0o755)
+
+    # Nginx map fragment
+    nginx_tmpl = jinja_env.get_template('nginx-map.conf.j2')
+    out = generated_dir / 'devicehub-instances.conf'
+    out.write_text(nginx_tmpl.render(instances=config.instances))
+
+    known = get_known_outputs(config.instances)
+    print(f"Generated {len(known)} files in {generated_dir}/:")
+    for fname in known:
+        print(f"  - {fname}")
+
+
+# ============================================================
 # Main
 # ============================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Validate and (in PR 2+) generate per-instance scripts."
+        description="Validate instances.yaml and generate per-instance scripts."
     )
     parser.add_argument(
         '--check', action='store_true',
-        help='Validate only, do not write artifacts (PR 2+ behavior).'
+        help='Validate only, do not generate artifacts.'
     )
     args = parser.parse_args()
 
@@ -262,9 +342,12 @@ def main():
     if args.check:
         return
 
-    # PR 2 will add: generate up-all.sh / down-all.sh / nginx.conf
-    print()
-    print("(generation not implemented yet — see PR 2)")
+    scripts_dir = repo_root / 'scripts'
+    try:
+        generate_artifacts(config, scripts_dir)
+    except Exception as e:
+        print(f"ERROR during generation: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
