@@ -76,7 +76,11 @@ ffmpeg.stderr.on('data', (data) => {
 });
 
 ffmpeg.on('exit', (code) => {
-    log.info({ code }, 'FFmpeg exited');
+    if (code !== 0) {
+        log.warn({ code, device: v4l2Device }, 'FFmpeg exited with error — parent will respawn child in ~2s');
+    } else {
+        log.info({ code }, 'FFmpeg exited normally');
+    }
     clearInterval(writeTimer);
     process.exit(code || 0);
 });
