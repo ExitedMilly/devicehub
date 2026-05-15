@@ -4,6 +4,7 @@ import { inject, injectable } from 'inversify'
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
+import { managerApiFetch } from '@/api/manager-api'
 
 const STORAGE_KEYS = {
   latitude: 'devicehub.gps.latitude',
@@ -161,7 +162,7 @@ export class DeviceGpsStore {
     try {
       const url = `/manager-api/gps/${encodeURIComponent(device.serial)}`
 
-      const response = await fetch(url, {
+      const response = await managerApiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -217,7 +218,7 @@ export class DeviceGpsStore {
     try {
       const url = `/manager-api/gps/${encodeURIComponent(device.serial)}/stop`
 
-      const response = await fetch(url, {
+      const response = await managerApiFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -307,7 +308,7 @@ export class DeviceGpsStore {
 
     try {
       const url = `/manager-api/walk/${encodeURIComponent(device.serial)}/start`
-      const response = await fetch(url, {
+      const response = await managerApiFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -350,7 +351,7 @@ export class DeviceGpsStore {
     })
     try {
       const url = `/manager-api/walk/${encodeURIComponent(device.serial)}/${action}`
-      const response = await fetch(url, { method: 'POST' })
+      const response = await managerApiFetch(url, { method: 'POST' })
       const data = await response.json().catch(() => null)
       if (!response.ok || !data?.ok) {
         throw new Error(data?.error || `HTTP ${response.status}`)
@@ -391,7 +392,7 @@ export class DeviceGpsStore {
     if (!device?.serial) return
     try {
       const url = `/manager-api/walk/${encodeURIComponent(device.serial)}/status`
-      const response = await fetch(url)
+      const response = await managerApiFetch(url)
       const data = await response.json().catch(() => null)
       if (!response.ok || !data?.ok) return
 

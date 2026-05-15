@@ -4,6 +4,7 @@ import { inject, injectable } from 'inversify'
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
+import { managerApiFetch } from '@/api/manager-api'
 
 const STORAGE_KEYS = {
   lux: 'devicehub.light.lux',
@@ -66,7 +67,7 @@ export class DeviceLightStore {
     try {
       const url = `/manager-api/light/${encodeURIComponent(device.serial)}`
 
-      const response = await fetch(url, {
+      const response = await managerApiFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lux }),

@@ -5,6 +5,7 @@ import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
+import { managerApiWebSocket } from '@/api/manager-api'
 
 @injectable()
 @deviceConnectionRequired()
@@ -113,7 +114,7 @@ export class DeviceAudioStore {
 
   private connectWebSocket(url: string): void {
     if (this.disposed) return
-    this.websocket = new WebSocket(url)
+    this.websocket = managerApiWebSocket(url)
     this.websocket.binaryType = 'arraybuffer'
 
     this.websocket.onopen = () => {

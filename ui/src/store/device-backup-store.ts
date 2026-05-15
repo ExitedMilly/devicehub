@@ -4,6 +4,7 @@ import { inject, injectable } from 'inversify'
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
+import { managerApiFetch } from '@/api/manager-api'
 
 interface BackupBackendStatus {
   serial: string
@@ -54,7 +55,7 @@ export class DeviceBackupStore {
 
     try {
       const url = `/manager-api/backup/${encodeURIComponent(device.serial)}`
-      const response = await fetch(url, { method: 'POST' })
+      const response = await managerApiFetch(url, { method: 'POST' })
       const data = await response.json().catch(() => null)
       if (!response.ok || !data?.ok) {
         throw new Error(data?.error || `HTTP ${response.status}`)
@@ -91,7 +92,7 @@ export class DeviceBackupStore {
 
     try {
       const url = `/manager-api/backup/${encodeURIComponent(device.serial)}/restore`
-      const response = await fetch(url, { method: 'POST' })
+      const response = await managerApiFetch(url, { method: 'POST' })
       const data = await response.json().catch(() => null)
       if (!response.ok || !data?.ok) {
         throw new Error(data?.error || `HTTP ${response.status}`)
@@ -122,7 +123,7 @@ export class DeviceBackupStore {
     runInAction(() => { this.isRefreshing = true })
     try {
       const url = `/manager-api/backup/${encodeURIComponent(device.serial)}/status`
-      const response = await fetch(url)
+      const response = await managerApiFetch(url)
       const data = await response.json().catch(() => null)
       if (!response.ok || !data?.ok) return
       runInAction(() => {
