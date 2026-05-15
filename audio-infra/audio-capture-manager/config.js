@@ -59,6 +59,12 @@ const PULSE_SOURCE_NAME = process.env.PULSE_SOURCE_NAME || null;
 const STF_SECRET = process.env.STF_SECRET || null;
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === '1';
 
+// Ownership check config (P0.6 PR 3)
+const DEVICEHUB_API_HOST = process.env.DEVICEHUB_API_HOST || 'devicehub-api';
+const DEVICEHUB_API_PORT = parseInt(process.env.DEVICEHUB_API_PORT) || 3000;
+const OWNERSHIP_CACHE_TTL_MS = parseInt(process.env.OWNERSHIP_CACHE_TTL_MS) || 30000;
+const OWNERSHIP_REQUEST_TIMEOUT_MS = parseInt(process.env.OWNERSHIP_REQUEST_TIMEOUT_MS) || 3000;
+
 function isSerialAllowed(serial) {
     if (!SINGLE_MODE) return true;
     return serial === INSTANCE_SERIAL;
@@ -75,5 +81,7 @@ module.exports = {
     EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
     PULSE_SINK_NAME, PULSE_SOURCE_NAME,
     STF_SECRET, AUTH_REQUIRED,
+    DEVICEHUB_API_HOST, DEVICEHUB_API_PORT,
+    OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS,
     isSerialAllowed,
 };

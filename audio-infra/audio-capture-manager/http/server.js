@@ -25,7 +25,7 @@ const handlers = [
     handleVideo,
 ];
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
 
     res.setHeader('Content-Type', 'application/json');
@@ -39,7 +39,7 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    if (authMiddleware(req, res, url)) return;
+    if (await authMiddleware(req, res, url)) return;
 
     for (const handler of handlers) {
         if (handler(req, res, url)) return;
