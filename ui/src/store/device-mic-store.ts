@@ -5,6 +5,7 @@ import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
+import { managerApiWebSocket } from '@/api/manager-api'
 
 export type EmulatorMicState = 'listening' | 'idle' | 'unknown'
 
@@ -58,7 +59,7 @@ export class DeviceMicStore {
 
   private connectStateWs(serial: string): void {
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    this.stateWs = new WebSocket(`${wsProto}//${window.location.host}/mic-state/${serial}`)
+    this.stateWs = managerApiWebSocket(`${wsProto}//${window.location.host}/mic-state/${serial}`)
     this.stateWs.onopen = (): void => {
       runInAction(() => { this.isStateConnected = true })
       console.log('[DeviceMicStore] Mic state WS connected for', serial)
@@ -157,7 +158,7 @@ export class DeviceMicStore {
 
   private connectSignaling(url: string): void {
     if (this.disposed) return
-    this.signalingWs = new WebSocket(url)
+    this.signalingWs = managerApiWebSocket(url)
     this.signalingWs.onopen = (): void => {
       if (this.disposed || !this.mediaStream) { this.cleanup(); return }
       console.log('[DeviceMicStore] Signaling WS connected, starting WebRTC mic')
