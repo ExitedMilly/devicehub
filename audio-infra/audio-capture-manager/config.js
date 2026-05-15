@@ -55,6 +55,10 @@ const EMULATOR_GRPC_HOST = process.env.EMULATOR_GRPC_HOST || null;
 const PULSE_SINK_NAME = process.env.PULSE_SINK_NAME || null;
 const PULSE_SOURCE_NAME = process.env.PULSE_SOURCE_NAME || null;
 
+// Auth config (P0.6)
+const STF_SECRET = process.env.STF_SECRET || null;
+const AUTH_REQUIRED = process.env.AUTH_REQUIRED === '1';
+
 function isSerialAllowed(serial) {
     if (!SINGLE_MODE) return true;
     return serial === INSTANCE_SERIAL;
@@ -70,5 +74,6 @@ module.exports = {
     INSTANCE_SERIAL, SINGLE_MODE,
     EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
     PULSE_SINK_NAME, PULSE_SOURCE_NAME,
+    STF_SECRET, AUTH_REQUIRED,
     isSerialAllowed,
 };

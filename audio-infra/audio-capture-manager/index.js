@@ -11,7 +11,13 @@ const {
     MIC_STATE_POLL_MS, CAMERA_V4L2_DEVICE,
     GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
     SINGLE_MODE, INSTANCE_SERIAL, EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
+    AUTH_REQUIRED, STF_SECRET,
 } = config;
+
+if (AUTH_REQUIRED && !STF_SECRET) {
+    log.error('AUTH_REQUIRED=1 but STF_SECRET is not set — refusing to start');
+    process.exit(1);
+}
 const { instances, micRtcInstances, cameraInstances, gpsSessions } = require('./stores');
 const { emulatorProto, getGrpcAddressFromSerial, callUnaryGrpc } = require('./grpc-client');
 const { paMonitor } = require('./pulse-monitor');

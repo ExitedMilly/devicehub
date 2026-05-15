@@ -4,6 +4,7 @@
   "description": "Manages FFmpeg audio capture, mic input, and WebRTC camera for DeviceHub emulators",
   "main": "index.js",
   "dependencies": {
+    "jws": "^4.0.0",
     "ws": "^8.16.0",
     "@grpc/grpc-js": "^1.10.0",
     "@grpc/proto-loader": "^0.7.0",

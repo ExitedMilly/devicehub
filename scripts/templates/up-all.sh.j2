@@ -7,6 +7,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# Load host-specific env if available
+if [ -f "$REPO_ROOT/scripts/instances.local.env" ]; then
+    set -a
+    source "$REPO_ROOT/scripts/instances.local.env"
+    set +a
+fi
+
 # Run host preflight
 "$REPO_ROOT/scripts/host-setup.sh" || {
     echo "[up-all] Host preflight failed"

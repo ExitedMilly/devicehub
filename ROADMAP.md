@@ -529,7 +529,62 @@ User's machine                                         Server
                                         │     ↓ YUV420P frames         │
                                         │   camera-writer.js           │
                                         │     switches source:         │
-                                        │     WebRTC → file            │
+                                        │     ivan@ivan-ASUS-Zenbook-14:~/caller/devicehub$ git diff --stat
+ ROADMAP.md                                         |  2 +-
+ audio-infra/audio-capture-manager/config.js        | 25 +++++++++++++++
+ audio-infra/audio-capture-manager/grpc-client.js   |  5 ++-
+ .../audio-capture-manager/http/routes-backup.js    | 19 +++++++++++
+ .../audio-capture-manager/http/routes-capture.js   | 14 ++++++++
+ .../audio-capture-manager/http/routes-gps.js       | 14 +++++++-
+ .../audio-capture-manager/http/routes-health.js    | 28 ++++++++++++----
+ .../audio-capture-manager/http/routes-light.js     |  7 ++++
+ .../audio-capture-manager/http/routes-pose.js      | 37 ++++++++++++++++++++++
+ .../audio-capture-manager/http/routes-walk.js      | 31 ++++++++++++++++++
+ audio-infra/audio-capture-manager/index.js         |  7 ++++
+ .../audio-capture-manager/ws/audio-output.js       |  7 ++++
+ .../audio-capture-manager/ws/camera-state.js       |  6 ++++
+ audio-infra/audio-capture-manager/ws/camera.js     |  7 ++++
+ audio-infra/audio-capture-manager/ws/mic-rtc.js    |  7 ++++
+ audio-infra/audio-capture-manager/ws/mic-state.js  |  6 ++++
+ 16 files changed, 213 insertions(+), 9 deletions(-)
+ivan@ivan-ASUS-Zenbook-14:~/caller/devicehub$ git status
+Текущая ветка: feature/p0-2-prototype
+Изменения, которые не в индексе для коммита:
+  (используйте «git add <файл>...», чтобы добавить файл в индекс)
+  (используйте «git restore <файл>...», чтобы отменить изменения в рабочем каталоге)
+	изменено:      ROADMAP.md
+	изменено:      audio-infra/audio-capture-manager/config.js
+	изменено:      audio-infra/audio-capture-manager/grpc-client.js
+	изменено:      audio-infra/audio-capture-manager/http/routes-backup.js
+	изменено:      audio-infra/audio-capture-manager/http/routes-capture.js
+	изменено:      audio-infra/audio-capture-manager/http/routes-gps.js
+	изменено:      audio-infra/audio-capture-manager/http/routes-health.js
+	изменено:      audio-infra/audio-capture-manager/http/routes-light.js
+	изменено:      audio-infra/audio-capture-manager/http/routes-pose.js
+	изменено:      audio-infra/audio-capture-manager/http/routes-walk.js
+	изменено:      audio-infra/audio-capture-manager/index.js
+	изменено:      audio-infra/audio-capture-manager/ws/audio-output.js
+	изменено:      audio-infra/audio-capture-manager/ws/camera-state.js
+	изменено:      audio-infra/audio-capture-manager/ws/camera.js
+	изменено:      audio-infra/audio-capture-manager/ws/mic-rtc.js
+	изменено:      audio-infra/audio-capture-manager/ws/mic-state.js
+
+индекс пуст (используйте «git add» и/или «git commit -a»)
+ivan@ivan-ASUS-Zenbook-14:~/caller/devicehub$ grep -rn "ws.close(4" audio-infra/audio-capture-manager/
+audio-infra/audio-capture-manager/camera/instance.js:32:            ws.close(4009, 'Camera already in use for ' + this.serial);
+audio-infra/audio-capture-manager/ws/server.js:22:        ws.close(4000, 'Invalid path');
+audio-infra/audio-capture-manager/ws/mic-rtc.js:16:        ws.close(4002, 'Serial not allowed in single mode');
+audio-infra/audio-capture-manager/ws/mic-rtc.js:37:        ws.close(4009, 'Mic RTC already in use for ' + serial);
+audio-infra/audio-capture-manager/ws/mic-state.js:14:        ws.close(4002, 'Serial not allowed in single mode');
+audio-infra/audio-capture-manager/ws/audio-output.js:14:        ws.close(4002, 'Serial not allowed in single mode');
+audio-infra/audio-capture-manager/ws/audio-output.js:18:    if (!instance) { ws.close(4004, 'No capture for ' + serial); return true; }
+audio-infra/audio-capture-manager/ws/audio-output.js:19:    if (instance.state !== 'running') { ws.close(4003, 'Not ready: ' + instance.state); return true; }
+audio-infra/audio-capture-manager/ws/camera-state.js:14:        ws.close(4002, 'Serial not allowed in single mode');
+audio-infra/audio-capture-manager/ws/camera.js:16:        ws.close(4002, 'Serial not allowed in single mode');
+audio-infra/audio-capture-manager/ws/camera.js:39:        ws.close(4009, 'Camera already in use for ' + serial);
+audio-infra/audio-capture-manager/mic/webrtc.js:44:            ws.close(4009, 'Mic already in use for ' + this.serial);
+audio-infra/audio-capture-manager/mic/webrtc.js:49:            ws.close(4010, 'gRPC proto not loaded');
+WebRTC → file            │
                                         │     ↓                        │
                                         │   /dev/videoN                │
                                         │     ↓                        │

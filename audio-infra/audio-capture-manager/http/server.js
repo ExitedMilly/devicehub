@@ -12,6 +12,7 @@ const { handlePose } = require('./routes-pose');
 const { handleLight } = require('./routes-light');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
+const { authMiddleware } = require('./auth-middleware');
 
 const handlers = [
     handleHealth,
@@ -30,13 +31,15 @@ const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();
         return;
     }
+
+    if (authMiddleware(req, res, url)) return;
 
     for (const handler of handlers) {
         if (handler(req, res, url)) return;

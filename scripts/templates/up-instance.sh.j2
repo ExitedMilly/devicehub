@@ -32,6 +32,8 @@ docker run -d \
     -e WEBRTC_PORT_MAX="{{ instance.webrtc_udp_max }}" \
     -e BACKUP_DIR="/backups" \
     -e LOG_PRETTY="${LOG_PRETTY:-1}" \
+    -e STF_SECRET="${STF_SECRET:-nosecret}" \
+    -e AUTH_REQUIRED="${AUTH_REQUIRED:-0}" \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "{{ env.BACKUPS_DIR }}:/backups" \
     --device "{{ instance.v4l2_device }}:/dev/video0" \
