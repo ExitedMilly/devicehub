@@ -1,6 +1,8 @@
 'use strict';
 
+const { URL } = require('url');
 const { verifyToken } = require('../http/auth-middleware');
+const { checkOwnership, extractSerial } = require('../http/ownership');
 const { AUTH_REQUIRED } = require('../config');
 const log = require('../log').getLogger('ws/auth');
 
@@ -13,20 +15,41 @@ function extractTokenFromSubprotocol(req) {
     return first.slice('access_token.'.length);
 }
 
-function verifyWsAuth(req) {
+async function verifyWsAuth(req) {
     const token = extractTokenFromSubprotocol(req);
     const result = verifyToken(token);
 
-    if (result.ok) {
+    if (!result.ok) {
+        if (AUTH_REQUIRED) {
+            log.warn({ path: req.url, reason: result.reason }, 'WS auth rejected');
+            return { ok: false, reason: result.reason, closeCode: 4001 };
+        }
+        return { ok: true, user: null };
+    }
+
+    // Ownership check — only when AUTH_REQUIRED=1
+    if (!AUTH_REQUIRED) {
         return { ok: true, user: result.user };
     }
 
-    if (AUTH_REQUIRED) {
-        log.warn({ path: req.url, reason: result.reason }, 'WS auth rejected');
-        return { ok: false, reason: result.reason };
+    const url = new URL(req.url, 'http://localhost');
+    const serial = extractSerial(url.pathname);
+    if (!serial) {
+        return { ok: true, user: result.user };
     }
 
-    return { ok: true, user: null };
+    const ownership = await checkOwnership(token, serial, result.user.email);
+
+    if (ownership === 'owns') {
+        return { ok: true, user: result.user };
+    }
+    if (ownership === 'not-owner') {
+        log.warn({ path: req.url, email: result.user.email, serial }, 'WS ownership denied');
+        return { ok: false, reason: 'forbidden', closeCode: 4003 };
+    }
+    // 'unavailable'
+    log.warn({ path: req.url, email: result.user.email, serial }, 'WS ownership unavailable');
+    return { ok: false, reason: 'unavailable', closeCode: 4503 };
 }
 
 module.exports = { verifyWsAuth };

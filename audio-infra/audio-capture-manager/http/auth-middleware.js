@@ -2,6 +2,7 @@
 
 const jws = require('jws');
 const { STF_SECRET, AUTH_REQUIRED } = require('../config');
+const { checkOwnership, extractSerial } = require('./ownership');
 const log = require('../log').getLogger('http/auth');
 
 const EXEMPT_PATHS = new Set([
@@ -42,7 +43,7 @@ function verifyToken(token) {
     }
 }
 
-function authMiddleware(req, res, url) {
+async function authMiddleware(req, res, url) {
     if (EXEMPT_PATHS.has(url.pathname)) {
         req.user = null;
         return false;
@@ -53,18 +54,45 @@ function authMiddleware(req, res, url) {
 
     if (result.ok) {
         req.user = result.user;
-        return false;
-    }
-
-    if (AUTH_REQUIRED) {
+    } else if (AUTH_REQUIRED) {
         log.warn({ url: req.url, reason: result.reason }, 'auth rejected');
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'unauthorized', reason: result.reason }));
         return true;
+    } else {
+        req.user = null;
+        return false;
     }
 
-    req.user = null;
-    return false;
+    // Ownership check — only when AUTH_REQUIRED=1 and user is authenticated
+    if (!AUTH_REQUIRED) {
+        return false;
+    }
+
+    const serial = extractSerial(url.pathname);
+    if (!serial) {
+        // Endpoint without serial param (e.g. /api/capture/status). Allow.
+        return false;
+    }
+
+    const ownership = await checkOwnership(token, serial, req.user.email);
+
+    if (ownership === 'owns') {
+        return false;
+    }
+
+    if (ownership === 'not-owner') {
+        log.warn({ url: req.url, email: req.user.email, serial }, 'ownership denied');
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'forbidden', reason: 'you do not own this device' }));
+        return true;
+    }
+
+    // 'unavailable' — fail closed
+    log.warn({ url: req.url, email: req.user.email, serial }, 'ownership check unavailable');
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'service unavailable', reason: 'ownership check failed' }));
+    return true;
 }
 
 module.exports = { authMiddleware, verifyToken, EXEMPT_PATHS };
