@@ -1,8 +1,8 @@
 'use strict';
 
-const { instances, cameraInstances } = require('../stores');
-const { registry } = require('../emulator-registry');
+const { cameraInstances } = require('../stores');
 const { CameraInstance } = require('../camera/instance');
+const { resolveSinkIndex } = require('./helpers');
 const { isSerialAllowed, INSTANCE_SERIAL } = require('../config');
 const log = require('../log').getLogger('ws/camera');
 
@@ -17,16 +17,7 @@ function handleCamera(ws, url) {
         return true;
     }
 
-    // Resolve sinkIndex
-    let sinkIndex = null;
-    const captureInstance = instances.get(serial);
-    if (captureInstance) {
-        sinkIndex = captureInstance.sinkIndex;
-    } else {
-        const hostname = serial.split(':')[0];
-        const info = registry.resolve(hostname);
-        sinkIndex = info.sinkIndex;
-    }
+    const sinkIndex = resolveSinkIndex(serial);
 
     // Get or create CameraInstance
     let camInst = cameraInstances.get(serial);

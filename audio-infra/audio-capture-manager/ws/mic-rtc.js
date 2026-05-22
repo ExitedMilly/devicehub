@@ -1,8 +1,8 @@
 'use strict';
 
-const { instances, micRtcInstances } = require('../stores');
-const { registry } = require('../emulator-registry');
+const { micRtcInstances } = require('../stores');
 const { WebRTCMicrophoneInstance } = require('../mic/webrtc');
+const { resolveSinkIndex } = require('./helpers');
 const { isSerialAllowed, INSTANCE_SERIAL } = require('../config');
 const log = require('../log').getLogger('ws/mic-rtc');
 
@@ -17,15 +17,7 @@ function handleMicRtc(ws, url) {
         return true;
     }
 
-    let sinkIndex = null;
-    const captureInstance = instances.get(serial);
-    if (captureInstance) {
-        sinkIndex = captureInstance.sinkIndex;
-    } else {
-        const hostname = serial.split(':')[0];
-        const info = registry.resolve(hostname);
-        sinkIndex = info.sinkIndex;
-    }
+    const sinkIndex = resolveSinkIndex(serial);
 
     let micRtcInst = micRtcInstances.get(serial);
     if (!micRtcInst || micRtcInst.state === 'stopped') {
