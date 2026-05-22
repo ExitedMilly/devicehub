@@ -11,6 +11,8 @@ Usage:
 import sys
 import os
 import argparse
+import subprocess
+import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
@@ -31,6 +33,14 @@ except ImportError:
 
 GENERATED_DIR_NAME = 'generated'
 TEMPLATES_DIR_NAME = 'templates'
+
+# Containers with these suffixes are legacy multi-mode and must never be
+# touched by orphan cleanup. emulator-1 = legacy single emulator.
+LEGACY_SUFFIXES = {'1'}
+
+# Patterns for matching our own naming conventions
+CONTAINER_NAME_PATTERN = re.compile(r'^(emulator|audio-capture-mgr)-(.+)$')
+SCRIPT_NAME_PATTERN = re.compile(r'^(up|down)-(.+)\.sh$')
 
 
 @dataclass
@@ -250,6 +260,110 @@ def cleanup_generated(generated_dir: Path, known_files: list) -> None:
             fpath.unlink()
 
 
+def find_orphan_containers(yaml_names: set) -> list:
+    """List docker containers matching our naming (emulator-X or
+    audio-capture-mgr-X) where X is not in yaml_names and not legacy.
+
+    Returns empty list if docker is unreachable (with warn to stderr).
+    """
+    try:
+        result = subprocess.run(
+            ['docker', 'ps', '-a', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=10
+        )
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        print(f"WARN: docker ps failed ({e}); skipping container orphan check",
+              file=sys.stderr)
+        return []
+
+    if result.returncode != 0:
+        print(f"WARN: docker ps returned {result.returncode}; "
+              f"skipping container orphan check", file=sys.stderr)
+        return []
+
+    orphans = []
+    for name in result.stdout.strip().split('\n'):
+        name = name.strip()
+        if not name:
+            continue
+        match = CONTAINER_NAME_PATTERN.match(name)
+        if not match:
+            continue
+        suffix = match.group(2)
+        if suffix in LEGACY_SUFFIXES:
+            continue
+        if suffix in yaml_names:
+            continue
+        orphans.append(name)
+    return sorted(orphans)
+
+
+def find_orphan_scripts(generated_dir: Path, yaml_names: set) -> list:
+    """List up-X.sh / down-X.sh files in generated/ where X is not in
+    yaml_names. up-all.sh / down-all.sh are aggregators, never orphans.
+    """
+    if not generated_dir.exists():
+        return []
+    orphans = []
+    for entry in generated_dir.iterdir():
+        if not entry.is_file():
+            continue
+        match = SCRIPT_NAME_PATTERN.match(entry.name)
+        if not match:
+            continue
+        suffix = match.group(2)
+        if suffix == 'all':
+            continue
+        if suffix in yaml_names:
+            continue
+        orphans.append(entry.name)
+    return sorted(orphans)
+
+
+def cleanup_orphans(
+    orphan_containers: list,
+    orphan_scripts: list,
+    generated_dir: Path,
+    assume_yes: bool,
+) -> None:
+    """Stop+rm orphan containers and delete orphan scripts. If --yes
+    is set, no prompt. Otherwise interactive confirmation."""
+    if not orphan_containers and not orphan_scripts:
+        return
+
+    print()
+    print("Orphan resources found (not in current instances.yaml):")
+    if orphan_containers:
+        print("  Containers:")
+        for name in orphan_containers:
+            print(f"    - {name}")
+    if orphan_scripts:
+        print("  Scripts:")
+        for name in orphan_scripts:
+            print(f"    - generated/{name}")
+
+    if not assume_yes:
+        try:
+            reply = input("\nClean these up? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            reply = ''
+        if reply != 'y':
+            print("Skipping cleanup; orphans remain.")
+            return
+
+    for name in orphan_containers:
+        print(f"Stopping {name}...")
+        subprocess.run(['docker', 'stop', name],
+                       capture_output=True, timeout=30)
+        subprocess.run(['docker', 'rm', name],
+                       capture_output=True, timeout=10)
+
+    for fname in orphan_scripts:
+        (generated_dir / fname).unlink(missing_ok=True)
+        print(f"Removed generated/{fname}")
+
+
 def generate_artifacts(config: Config, scripts_dir: Path) -> None:
     """Render all templates and write to scripts/generated/."""
     templates_dir = scripts_dir / TEMPLATES_DIR_NAME
@@ -312,6 +426,15 @@ def main():
         '--check', action='store_true',
         help='Validate only, do not generate artifacts.'
     )
+    parser.add_argument(
+        '-y', '--yes', action='store_true',
+        help='Auto-confirm orphan cleanup (non-interactive).'
+    )
+    parser.add_argument(
+        '--no-cleanup', action='store_true',
+        help='Skip orphan cleanup entirely. Orphan containers and '
+             'scripts from removed instances are left alone.'
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent
@@ -343,6 +466,16 @@ def main():
         return
 
     scripts_dir = repo_root / 'scripts'
+    generated_dir = scripts_dir / GENERATED_DIR_NAME
+
+    # Orphan check & cleanup before generating new artifacts
+    if not args.no_cleanup:
+        yaml_names = {i.name for i in config.instances}
+        orphan_containers = find_orphan_containers(yaml_names)
+        orphan_scripts = find_orphan_scripts(generated_dir, yaml_names)
+        cleanup_orphans(orphan_containers, orphan_scripts,
+                        generated_dir, args.yes)
+
     try:
         generate_artifacts(config, scripts_dir)
     except Exception as e:
