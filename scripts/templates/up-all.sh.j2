@@ -28,5 +28,10 @@ echo "================================================"
 
 {% endfor %}
 echo "================================================"
+echo "[up-all] Reloading nginx routing map..."
+echo "================================================"
+docker exec devicehub-nginx nginx -s reload 2>&1 || \
+    echo "[up-all] WARN: nginx reload failed — verify devicehub-nginx is running"
+echo "================================================"
 echo "[up-all] All {{ instances|length }} instances brought up."
 echo "================================================"

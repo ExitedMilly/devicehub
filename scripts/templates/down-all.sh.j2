@@ -12,4 +12,7 @@ echo "[down-all] Tearing down: {{ instance.name }}"
 "$SCRIPT_DIR/down-{{ instance.name }}.sh"
 
 {% endfor %}
+echo "[down-all] Reloading nginx routing map..."
+docker exec devicehub-nginx nginx -s reload 2>&1 || \
+    echo "[down-all] WARN: nginx reload failed"
 echo "[down-all] All instances stopped."
