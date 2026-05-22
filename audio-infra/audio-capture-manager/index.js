@@ -105,7 +105,8 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
     }
 });
 
-process.on('SIGTERM', () => {
+function shutdown(signal) {
+    log.info({ signal }, 'shutting down');
     paMonitor.stop();
     micStateMonitor.stop();
     cameraStateMonitor.stop();
@@ -119,19 +120,6 @@ process.on('SIGTERM', () => {
     walkSimulator.shutdown();
     poseScenario.shutdown();
     server.close(() => process.exit(0));
-});
-process.on('SIGINT', () => {
-    paMonitor.stop();
-    micStateMonitor.stop();
-    cameraStateMonitor.stop();
-    stopCameraWriter();
-    for (const [, inst] of instances) inst.stop();
-    for (const [, inst] of micRtcInstances) inst.stop();
-    for (const [, inst] of cameraInstances) inst.stop();
-    for (const serial of Array.from(gpsSessions.keys())) {
-        stopGpsKeepAlive(serial);
-    }
-    walkSimulator.shutdown();
-    poseScenario.shutdown();
-    server.close(() => process.exit(0));
-});
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
