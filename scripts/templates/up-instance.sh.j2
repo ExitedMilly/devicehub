@@ -53,14 +53,29 @@ docker run -d \
     --restart unless-stopped \
     "{{ defaults.capture_image }}"
 
-echo "[{{ instance.name }}] Waiting for capture-mgr to settle..."
-sleep 5
-
-if ! docker ps --filter "name=$CAPTURE_NAME" --format '{{ '{{' }}.Status{{ '}}' }}' | grep -q "^Up"; then
-    echo "[{{ instance.name }}] ERROR: $CAPTURE_NAME not running. Logs:"
-    docker logs "$CAPTURE_NAME" 2>&1 | tail -30
-    exit 1
-fi
+echo "[{{ instance.name }}] Waiting for capture-mgr to become healthy..."
+for i in $(seq 1 30); do
+    STATUS=$(docker inspect "$CAPTURE_NAME" --format '{{ '{{' }}.State.Health.Status{{ '}}' }}' 2>/dev/null || echo "missing")
+    case "$STATUS" in
+        healthy)
+            echo "[{{ instance.name }}] capture-mgr is healthy (${i}s elapsed)"
+            break
+            ;;
+        missing)
+            echo "[{{ instance.name }}] ERROR: $CAPTURE_NAME container missing. Logs:"
+            docker logs "$CAPTURE_NAME" 2>&1 | tail -30
+            exit 1
+            ;;
+        *)
+            sleep 1
+            ;;
+    esac
+    if [ "$i" = "30" ]; then
+        echo "[{{ instance.name }}] ERROR: $CAPTURE_NAME not healthy after 30s (status=$STATUS). Logs:"
+        docker logs "$CAPTURE_NAME" 2>&1 | tail -30
+        exit 1
+    fi
+done
 
 echo "[{{ instance.name }}] Starting emulator..."
 docker run -d \
