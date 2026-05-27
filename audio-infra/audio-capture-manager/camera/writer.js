@@ -33,19 +33,11 @@ function startCameraWriter() {
         stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    cameraWriterProcess.stdout.on('data', (data) => {
-        const msg = data.toString().trim();
-        if (msg) {
-            for (const line of msg.split('\n')) {
-                log.info(line);
-            }
-        }
-    });
-
-    cameraWriterProcess.stderr.on('data', (data) => {
-        const msg = data.toString().trim();
-        if (msg) log.error({ msg }, 'Camera writer stderr');
-    });
+    // Child has its own pino logger (camera-writer-child); forward its
+    // output directly without re-formatting. Re-logging through parent
+    // pino would double-wrap every line and corrupt the module tag.
+    cameraWriterProcess.stdout.pipe(process.stdout);
+    cameraWriterProcess.stderr.pipe(process.stderr);
 
     cameraWriterProcess.on('spawn', () => {
         log.info({ pid: cameraWriterProcess.pid }, 'Camera writer started');
