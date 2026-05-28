@@ -7,6 +7,7 @@ const log = require('../log').getLogger('http/auth');
 
 const EXEMPT_PATHS = new Set([
     '/api/health',
+    '/api/metrics',
 ]);
 
 function extractToken(req) {
