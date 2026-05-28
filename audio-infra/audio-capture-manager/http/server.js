@@ -12,10 +12,12 @@ const { handlePose } = require('./routes-pose');
 const { handleLight } = require('./routes-light');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
+const { handleMetrics } = require('./routes-metrics');
 const { authMiddleware } = require('./auth-middleware');
 
 const handlers = [
     handleHealth,
+    handleMetrics,
     handleCapture,
     handleGps,
     handleWalk,
