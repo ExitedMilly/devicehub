@@ -14,6 +14,7 @@ const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
 const { handleMetrics } = require('./routes-metrics');
 const { authMiddleware } = require('./auth-middleware');
+const { incrCounter } = require('../metrics');
 
 const handlers = [
     handleHealth,
@@ -29,6 +30,7 @@ const handlers = [
 
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
+    incrCounter('capture_mgr_http_requests_total', { method: req.method });
 
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Access-Control-Allow-Origin', '*');

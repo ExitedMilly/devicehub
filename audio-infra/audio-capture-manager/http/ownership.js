@@ -8,6 +8,7 @@ const {
     OWNERSHIP_REQUEST_TIMEOUT_MS,
 } = require('../config');
 const log = require('../log').getLogger('ownership');
+const { incrCounter } = require('../metrics');
 
 // In-memory positive cache: key = email:serial, value = { expiresAt }
 const cache = new Map();
@@ -88,13 +89,20 @@ function fetchOwnership(jwt, serial, email) {
  */
 async function checkOwnership(jwt, serial, email) {
     if (cacheGet(email, serial)) {
+        incrCounter('capture_mgr_ownership_cache_hits_total');
+        incrCounter('capture_mgr_ownership_checks_total', { result: 'owns' });
         return 'owns';
     }
     const result = await fetchOwnership(jwt, serial, email);
     if (result === 'owns') {
         cacheSet(email, serial);
     }
+    incrCounter('capture_mgr_ownership_checks_total', { result });
     return result;
 }
 
-module.exports = { checkOwnership, extractSerial };
+function getCacheSize() {
+    return cache.size;
+}
+
+module.exports = { checkOwnership, extractSerial, getCacheSize };

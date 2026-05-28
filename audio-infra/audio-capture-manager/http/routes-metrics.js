@@ -1,9 +1,11 @@
 'use strict';
 
 const { render } = require('../metrics');
+const { collectGauges } = require('../metrics-app');
 
 function handleMetrics(req, res, url) {
     if (req.method === 'GET' && url.pathname === '/api/metrics') {
+        collectGauges();
         const body = render();
         res.writeHead(200, {
             'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
