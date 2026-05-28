@@ -13,11 +13,14 @@ const handlers = [
 ];
 
 const { verifyWsAuth } = require('./auth-middleware');
+const { incrCounter } = require('../metrics');
 
 function attachWsServer(httpServer) {
     const wss = new WebSocketServer({ server: httpServer });
     wss.on('connection', async (ws, req) => {
         const url = new URL(req.url, 'http://localhost:' + MANAGER_PORT);
+        const endpoint = url.pathname.split('/')[1] || 'unknown';
+        incrCounter('capture_mgr_ws_connections_total', { endpoint });
 
         const auth = await verifyWsAuth(req);
         if (!auth.ok) {

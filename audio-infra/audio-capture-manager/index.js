@@ -33,6 +33,7 @@ const { registry } = require('./emulator-registry');
 const { CaptureInstance } = require('./audio/capture');
 const { server } = require('./http/server');
 const { attachWsServer } = require('./ws/server');
+const { registerAppMetrics } = require('./metrics-app');
 
 walkSimulator.init({
     setMockGpsLocation,
@@ -47,6 +48,7 @@ poseScenario.init({
     setDevicePoseRotation: setDevicePoseRotation,
 });
 
+registerAppMetrics();
 attachWsServer(server);
 
 // ===================== Startup =====================
