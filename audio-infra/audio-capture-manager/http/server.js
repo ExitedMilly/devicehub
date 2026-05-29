@@ -12,6 +12,7 @@ const { handlePose } = require('./routes-pose');
 const { handleLight } = require('./routes-light');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
+const { handleFileInject } = require('./routes-file-inject');
 const { handleMetrics } = require('./routes-metrics');
 const { authMiddleware } = require('./auth-middleware');
 const { incrCounter } = require('../metrics');
@@ -26,6 +27,7 @@ const handlers = [
     handleLight,
     handleBackup,
     handleVideo,
+    handleFileInject,
 ];
 
 const server = http.createServer(async (req, res) => {
