@@ -1,0 +1,18 @@
+{
+  "name": "devicehub-play-clip",
+  "version": "1.0.0",
+  "description": "Remote client that streams a local mp4 into a DeviceHub emulator's virtual camera + microphone (P1.1 file injection).",
+  "bin": {
+    "play-clip": "play-clip.js"
+  },
+  "main": "play-clip.js",
+  "scripts": {
+    "start": "node play-clip.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
