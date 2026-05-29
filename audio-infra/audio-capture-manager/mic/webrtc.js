@@ -17,6 +17,7 @@ class WebRTCMicrophoneInstance {
         this.grpcAddress = this.hostname + ':' + GRPC_PORT;
         this.state = 'idle';
         this.client = null;
+        this.fileInjectActive = false;
         this.startedAt = null;
         this.lastError = null;
         this.bytesReceived = 0;
@@ -87,6 +88,69 @@ class WebRTCMicrophoneInstance {
                 this.state = 'idle';
             }
         });
+    }
+
+    startFileMode(ws) {
+        if (this.client) {
+            ws.close(4009, 'Mic already in use for ' + this.serial);
+            return;
+        }
+
+        if (!emulatorProto) {
+            ws.close(4010, 'gRPC proto not loaded');
+            return;
+        }
+
+        // NOTE: file mode intentionally does NOT set this.client (unlike start()).
+        // fileInjectActive is the sole busy marker for file injection; this.client
+        // stays reserved for WebRTC so the lock checks distinguish the two sources.
+        this.fileInjectActive = true;
+        this.state = 'streaming';
+        this.startedAt = new Date();
+        this.lastError = null;
+        this.bytesReceived = 0;
+        this.pcmBytesSent = 0;
+        this.framesReceived = 0;
+        this.pcmBuffer = Buffer.alloc(0);
+
+        this._startGrpcPipeline();
+
+        log.info({ serial: this.serial }, 'File audio injection started');
+
+        let cleanedUp = false;
+        const cleanup = () => {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            this._stopPipeline();
+            this.client = null;
+            this.fileInjectActive = false;
+            if (this.state !== 'stopped') {
+                this.state = 'idle';
+            }
+        };
+
+        ws.on('message', (data) => {
+            if (Buffer.isBuffer(data)) {
+                this.pushFilePcm(data);
+            }
+        });
+
+        ws.on('close', (code, reason) => {
+            log.info({ serial: this.serial, code, reason: reason ? String(reason) : 'none', frames: this.framesReceived, sent: this.pcmBytesSent }, 'File audio disconnected');
+            cleanup();
+        });
+
+        ws.on('error', (err) => {
+            log.error({ serial: this.serial, err: err.message }, 'File audio WS error');
+            cleanup();
+        });
+    }
+
+    pushFilePcm(buffer) {
+        if (!Buffer.isBuffer(buffer)) return;
+        this.bytesReceived += buffer.length;
+        this.framesReceived += 1;
+        this.pcmBuffer = Buffer.concat([this.pcmBuffer, buffer]);
     }
 
     async _handleSignaling(msg) {
