@@ -1193,7 +1193,9 @@ paths:
       tags:
         - admin
       summary: Creates a user
-      description: Creates a user in the database
+      description: Creates a user in the database. Requires admin privilege; a
+        non-empty password must be supplied in the request body for local
+        authentication.
       operationId: createUser
       parameters:
         - name: email
@@ -1208,6 +1210,13 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        description: User credentials; a non-empty password is required
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPasswordPayload'
+        required: true
       responses:
         "201":
           description: User information
@@ -1218,13 +1227,15 @@ paths:
         default:
           description: |
             Unexpected Error:
+              * 400: Bad Request => password is required
               * 401: Unauthorized => bad credentials
-              * 403: Forbidden => user already exists
+              * 403: Forbidden => user already exists or caller is not an admin
               * 500: Internal Server Error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/UnexpectedErrorResponse'
+      x-codegen-request-body-name: user
     delete:
       tags:
         - admin
@@ -4538,6 +4549,14 @@ components:
           type: string
         user:
           $ref: '#/components/schemas/User'
+    UserPasswordPayload:
+      required:
+      - password
+      type: object
+      properties:
+        password:
+          type: string
+          description: Password for local authentication; required and must be non-empty
     ServiceUserResponse:
       required:
       - serviceUserInfo
