@@ -112,7 +112,7 @@ services:
         container_name: devicehub-auth
         env_file:
             - scripts/variables.env
-        command: stf auth-mock --port 3000 --app-url https://${STF_DOMAIN}:${STF_PORT} --secret=${STF_SECRET}
+        command: stf auth-local --port 3000 --app-url https://${STF_DOMAIN}:${STF_PORT} --secret=${STF_SECRET}
         depends_on:
             devicehub-migrate:
                 condition: service_completed_successfully
