@@ -332,10 +332,12 @@ export const updateUserGroupQuota = async ({ email, ...params }: UpdateUserGroup
   return data.success
 }
 
-export const createUser = async ({ email, ...params }: CreateUserArgs): Promise<boolean> => {
-  const { data } = await openstfApiClient.post<UserResponse>(`${OPENSTF_API_ROUTES.users}/${email}`, undefined, {
-    params,
-  })
+export const createUser = async ({ email, password, ...params }: CreateUserArgs): Promise<boolean> => {
+  const { data } = await openstfApiClient.post<UserResponse>(
+    `${OPENSTF_API_ROUTES.users}/${email}`,
+    { password }, // body — backend (PR 2) reads the password from the request body
+    { params } // query — name (unchanged)
+  )
 
   return data.success
 }

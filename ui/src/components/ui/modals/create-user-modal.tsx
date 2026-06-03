@@ -22,6 +22,7 @@ export const CreateUserModal = observer(({ isOpen, onClose }: CreateUserModalPro
   const { t } = useTranslation()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [nameError, setNameError] = useState('')
   const [emailError, setEmailError] = useState('')
   const { mutate: createUser } = useCreateUser()
@@ -36,13 +37,18 @@ export const CreateUserModal = observer(({ isOpen, onClose }: CreateUserModalPro
     setName(event.target.value)
   }
 
+  const onPasswordChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setPassword(event.target.value)
+  }
+
   const onSave = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
-    createUser({ email, name })
+    createUser({ email, name, password })
 
     setName('')
     setEmail('')
+    setPassword('')
 
     onClose()
   }
@@ -62,10 +68,20 @@ export const CreateUserModal = observer(({ isOpen, onClose }: CreateUserModalPro
               onError={(error) => setEmailError(error)}
             />
           </FormItem>
+          <FormItem top={t('Password')}>
+            <Input
+              autoComplete='new-password'
+              placeholder='Please enter a password'
+              type='password'
+              value={password}
+              required
+              onChange={onPasswordChange}
+            />
+          </FormItem>
           <Spacing />
           <FormItem>
             <Button
-              disabled={!name || !email || !!nameError || !!emailError}
+              disabled={!name || !email || !password || !!nameError || !!emailError}
               mode='primary'
               size='l'
               type='submit'
