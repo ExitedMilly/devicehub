@@ -14,7 +14,7 @@ export class DeviceAudioStore {
   private mediaSource: MediaSource | null = null
   private sourceBuffer: SourceBuffer | null = null
   private audioElement: HTMLAudioElement | null = null
-  private queue: Uint8Array[] = []
+  private queue: Uint8Array<ArrayBuffer>[] = []
   private appending = false
   private disposed = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -123,7 +123,9 @@ export class DeviceAudioStore {
       void this.mediaDevicesStore.refreshDevices()
     }
     this.websocket.onmessage = (event: MessageEvent) => {
-      this.queue.push(new Uint8Array(event.data))
+      // binaryType is 'arraybuffer', so event.data is always a plain ArrayBuffer
+      // (never SharedArrayBuffer) — narrow it so the chunk satisfies BufferSource.
+      this.queue.push(new Uint8Array(event.data as ArrayBuffer))
       this.drainQueue()
     }
     this.websocket.onerror = () => {}

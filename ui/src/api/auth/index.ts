@@ -2,7 +2,7 @@ import { authClient } from './auth-client'
 
 import { AUTH_ROUTES } from './routes'
 
-import type { LdapAuthArgs, MockAuthArgs, AuthResponse, GetAuthUrlResponse } from './types'
+import type { LdapAuthArgs, LocalAuthArgs, MockAuthArgs, AuthResponse, GetAuthUrlResponse } from './types'
 
 export const mockAuth = async (body: MockAuthArgs): Promise<AuthResponse> => {
   const { data } = await authClient.post<AuthResponse>(AUTH_ROUTES.mock, body)
@@ -12,6 +12,12 @@ export const mockAuth = async (body: MockAuthArgs): Promise<AuthResponse> => {
 
 export const ldapAuth = async (body: LdapAuthArgs): Promise<AuthResponse> => {
   const { data } = await authClient.post<AuthResponse>(AUTH_ROUTES.ldap, body)
+
+  return data
+}
+
+export const localAuth = async (body: LocalAuthArgs): Promise<AuthResponse> => {
+  const { data } = await authClient.post<AuthResponse>(AUTH_ROUTES.local, body)
 
   return data
 }

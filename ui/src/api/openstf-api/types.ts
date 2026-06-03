@@ -34,7 +34,7 @@ export type TeamGroupArgs = {
   groupId: string
 }
 
-export type CreateUserArgs = { email: string } & CreateUserParams
+export type CreateUserArgs = { email: string; password: string } & CreateUserParams
 export type RemoveUserArgs = { email: string } & DeleteUserParams
 export type RemoveUsersArgs = { emails: string } & DeleteUsersParams
 export type RemoveDevicesArgs = { ids: string } & DeleteDeviceParams
