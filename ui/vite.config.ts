@@ -44,7 +44,8 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         authMock: resolve(__dirname, 'auth/auth-mock.html'),
-        authLdap: resolve(__dirname, 'auth/auth-ldap.html')
+        authLdap: resolve(__dirname, 'auth/auth-ldap.html'),
+        authLocal: resolve(__dirname, 'auth/auth-local.html')
       },
     },
   },

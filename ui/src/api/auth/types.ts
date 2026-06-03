@@ -8,6 +8,11 @@ export type LdapAuthArgs = {
   password: string
 }
 
+export type LocalAuthArgs = {
+  email: string
+  password: string
+}
+
 export type AuthResponse = {
   success: boolean
   redirect: string
