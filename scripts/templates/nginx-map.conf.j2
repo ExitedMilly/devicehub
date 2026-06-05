@@ -6,6 +6,6 @@
 map $request_uri $capture_upstream {
     default                                                                                            "172.20.0.1:7600";
 {% for instance in instances %}
-    "~^/(?:audio|mic-rtc|mic-state|camera|camera-state|manager-api/[^/]+)/{{ instance.serial.split(':')[0] | replace('-', '\\-') | replace('.', '\\.') }}(?::|%3[Aa]){{ instance.serial.split(':')[1] }}(?:/|$|\?)"  "audio-capture-mgr-{{ instance.name }}:{{ instance.manager_port }}";
+    "~^/(?:audio|mic-rtc|mic-state|camera|camera-state|file-video|file-audio|manager-api/[^/]+)/{{ instance.serial.split(':')[0] | replace('-', '\\-') | replace('.', '\\.') }}(?::|%3[Aa]){{ instance.serial.split(':')[1] }}(?:/|$|\?)"  "audio-capture-mgr-{{ instance.name }}:{{ instance.manager_port }}";
 {% endfor %}
 }
