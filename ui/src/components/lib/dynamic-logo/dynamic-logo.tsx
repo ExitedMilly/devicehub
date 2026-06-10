@@ -25,7 +25,7 @@ export const DynamicLogo = memo(({ width, height, className, logoType = 'deviceH
         <DeviceHubIcon
           className={cn(className, { [styles.darkLogo]: colorScheme === 'dark' })}
           height={height}
-          title='DeviceHub'
+          title='OrchID'
           width={width}
         />
       </ConditionalRender>

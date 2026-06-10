@@ -17,7 +17,6 @@ const OPTION_NAMES: Record<SupportedLanguages, string> = {
   ko: '한국어',
   pl: 'Język polski',
   ['pt-BR']: 'Português (Brasil)',
-  ['ru-RU']: 'Русский',
   ['be-BY']: 'Беларуская',
   ['tt-RU']: 'Татар',
   ['kk-KZ']: 'Қазақ',
