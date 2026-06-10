@@ -8,6 +8,7 @@ const { WebSocket } = require('ws');
 const { GRPC_PORT, SAMPLE_RATE, CHANNELS, WEBRTC_PORT_MIN, WEBRTC_PORT_MAX } = require('../config');
 const { emulatorProto } = require('../grpc-client');
 const { int16ArrayToBuffer, downmixToMonoInt16, resampleMonoInt16Nearest } = require('../audio/helpers');
+const { micStateMonitor } = require('./state-monitor');
 
 class WebRTCMicrophoneInstance {
     constructor(serial, sinkIndex) {
@@ -147,6 +148,15 @@ class WebRTCMicrophoneInstance {
     }
 
     pushFilePcm(buffer) {
+        // STABILITY GATE: injecting audio via gRPC when no app is recording the mic
+        // crashes QEMU. Only inject while the emulator's mic is actively listened to.
+        // Drop frames otherwise (resumes automatically when an app starts recording).
+        const micState = micStateMonitor.getStateBySerial(this.serial);
+        if (micState !== 'listening') {
+            // Optionally count drops for diagnostics, but do NOT push to gRPC.
+            this.fileAudioDropped = (this.fileAudioDropped || 0) + buffer.length;
+            return;
+        }
         if (!Buffer.isBuffer(buffer)) return;
         this.bytesReceived += buffer.length;
         this.framesReceived += 1;
