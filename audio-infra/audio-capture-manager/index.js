@@ -35,17 +35,22 @@ const { server } = require('./http/server');
 const { attachWsServer } = require('./ws/server');
 const { registerAppMetrics } = require('./metrics-app');
 
-walkSimulator.init({
-    setMockGpsLocation,
-    startGpsKeepAlive,
-    stopGpsKeepAlive,
-});
-
 poseScenario.init({
     emulatorProto: emulatorProto,
     callUnaryGrpc: callUnaryGrpc,
     getGrpcAddressFromSerial: getGrpcAddressFromSerial,
     setDevicePoseRotation: setDevicePoseRotation,
+});
+
+// walk-simulator depends on poseScenario for accelerometer auto-sync, so it
+// is initialized after poseScenario.init() above.
+walkSimulator.init({
+    setMockGpsLocation,
+    startGpsKeepAlive,
+    stopGpsKeepAlive,
+    isScenarioRunning: poseScenario.isScenarioRunning,
+    startScenario: poseScenario.startScenario,
+    stopScenario: poseScenario.stopScenario,
 });
 
 registerAppMetrics();

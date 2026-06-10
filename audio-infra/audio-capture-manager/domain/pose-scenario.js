@@ -369,6 +369,12 @@ function getStatus(serial) {
     return statusSnapshot(sessions.get(serial));
 }
 
+// True if a scenario session exists for this serial (running or paused).
+// Used by the walk simulator to avoid disturbing a manually-started scenario.
+function isScenarioRunning(serial) {
+    return sessions.has(serial);
+}
+
 function getAllStatuses() {
     const out = {};
     for (const [serial, session] of sessions) {
@@ -397,6 +403,7 @@ module.exports = {
     pauseScenario: pauseScenario,
     resumeScenario: resumeScenario,
     stopScenario: stopScenario,
+    isScenarioRunning: isScenarioRunning,
     getStatus: getStatus,
     getAllStatuses: getAllStatuses,
     listScenarios: listScenarios,

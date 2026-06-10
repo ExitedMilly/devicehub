@@ -22,6 +22,7 @@
 //   the UI snapshot can never disagree with the actual mock-set location.
 
 const https = require('https');
+const fs = require('fs');
 const log = require('../log').getLogger('domain/walk-simulator');
 
 // ----- Configuration -----
@@ -33,6 +34,18 @@ const MAX_JITTER_M        = 1;      // cap user-supplied jitter
 const OSRM_HOST           = 'router.project-osrm.org';
 const OSRM_TIMEOUT_MS     = 10000;
 const ALLOWED_PROFILES    = new Set(['foot', 'bike', 'driving']);
+
+// Offline route cache: persisted LRU so GPS walks survive OSRM outages.
+const ROUTE_CACHE_PATH    = '/backups/route-cache.json';
+const ROUTE_CACHE_MAX     = 10;
+
+// GPS movement profile -> matching accelerometer (pose) scenario name.
+// Keys are SCENARIOS keys in pose-scenario.js.
+const PROFILE_TO_SCENARIO = {
+    foot:    'walking',
+    bike:    'cycling',
+    driving: 'driving',
+};
 
 const SPEED_PRESETS = {
     walking: 1.4,
@@ -48,10 +61,19 @@ let _setMockGpsLocation = null;
 let _startGpsKeepAlive = null;
 let _stopGpsKeepAlive = null;
 
+// Pose-scenario controls (auto-sync accelerometer with GPS movement).
+let _startScenario = null;
+let _stopScenario = null;
+let _isScenarioRunning = null;
+
 function init(deps) {
     _setMockGpsLocation = deps.setMockGpsLocation;
     _startGpsKeepAlive = deps.startGpsKeepAlive;
     _stopGpsKeepAlive = deps.stopGpsKeepAlive;
+    _startScenario = deps.startScenario;
+    _stopScenario = deps.stopScenario;
+    _isScenarioRunning = deps.isScenarioRunning;
+    loadRouteCache();
 }
 
 // ----- Geo helpers -----
@@ -147,13 +169,97 @@ function osrmFetch(path) {
     });
 }
 
-async function fetchRoute(stops, profile) {
-    if (!ALLOWED_PROFILES.has(profile)) {
-        throw new Error('profile must be one of ' + Array.from(ALLOWED_PROFILES).join(', '));
+// ----- Route cache (offline LRU) -----
+//
+// Best-effort LRU of the last ROUTE_CACHE_MAX OSRM routes, persisted to
+// ROUTE_CACHE_PATH. On OSRM failure we serve a matching cached route so GPS
+// walk simulation keeps working when router.project-osrm.org is unreachable.
+// Disk errors NEVER break a route request - the cache is purely additive.
+
+// Insertion-ordered Map: first key = oldest (eviction target), last = newest.
+const routeCache = new Map();
+let _routeCacheLoaded = false;
+
+function routeCacheKey(stops, profile) {
+    return profile + ':' + stops.map(function(s) {
+        return s.lat.toFixed(5) + ',' + s.lon.toFixed(5);
+    }).join(';');
+}
+
+function loadRouteCache() {
+    if (_routeCacheLoaded) return;
+    _routeCacheLoaded = true;
+    let raw;
+    try {
+        raw = fs.readFileSync(ROUTE_CACHE_PATH, 'utf8');
+    } catch (err) {
+        // Missing file is the normal first-run case - nothing to load.
+        if (err.code !== 'ENOENT') {
+            log.warn({ path: ROUTE_CACHE_PATH, err: err.message }, 'Route cache unreadable, starting empty');
+        }
+        return;
     }
-    if (!Array.isArray(stops) || stops.length < 2) {
-        throw new Error('need at least 2 stops to build a route');
+    try {
+        const parsed = JSON.parse(raw);
+        const entries = Array.isArray(parsed) ? parsed : [];
+        for (const e of entries) {
+            if (e && typeof e.key === 'string' && e.value) {
+                routeCache.set(e.key, e.value);
+            }
+        }
+        // Trim to the cap in case the file held more (oldest first).
+        while (routeCache.size > ROUTE_CACHE_MAX) {
+            routeCache.delete(routeCache.keys().next().value);
+        }
+        log.info({ path: ROUTE_CACHE_PATH, entries: routeCache.size }, 'Route cache loaded');
+    } catch (err) {
+        log.warn({ path: ROUTE_CACHE_PATH, err: err.message }, 'Route cache corrupt, starting empty');
     }
+}
+
+function persistRouteCache() {
+    // Serialize newest-last so insertion order is preserved on reload.
+    const entries = [];
+    for (const [key, value] of routeCache) {
+        entries.push({ key: key, value: value });
+    }
+    const tmp = ROUTE_CACHE_PATH + '.tmp';
+    try {
+        fs.writeFileSync(tmp, JSON.stringify(entries), 'utf8');
+        fs.renameSync(tmp, ROUTE_CACHE_PATH);
+    } catch (err) {
+        log.warn({ path: ROUTE_CACHE_PATH, err: err.message }, 'Route cache persist failed (best-effort)');
+        try { fs.unlinkSync(tmp); } catch (e) { /* ignore */ }
+    }
+}
+
+function cacheStoreRoute(key, route) {
+    // Re-insert at the end (most-recent) and evict the oldest beyond the cap.
+    if (routeCache.has(key)) routeCache.delete(key);
+    routeCache.set(key, {
+        points: route.points,
+        distanceM: route.distanceM,
+        durationS: route.durationS,
+        cachedAt: new Date().toISOString(),
+    });
+    while (routeCache.size > ROUTE_CACHE_MAX) {
+        routeCache.delete(routeCache.keys().next().value);
+    }
+    persistRouteCache();
+}
+
+function cacheLookupRoute(key) {
+    if (!routeCache.has(key)) return null;
+    const value = routeCache.get(key);
+    // Mark as most-recently-used (LRU touch); not persisted - order on disk
+    // only matters for eviction priority across restarts.
+    routeCache.delete(key);
+    routeCache.set(key, value);
+    return value;
+}
+
+// Inner OSRM-only route build (the original fetchRoute logic, unchanged).
+async function fetchRouteOsrm(stops, profile) {
     // OSRM expects lon,lat (GeoJSON convention)
     const coords = stops.map(function(s) { return s.lon + ',' + s.lat; }).join(';');
     const path = '/route/v1/' + profile + '/' + coords + '?overview=full&geometries=geojson&steps=false';
@@ -169,6 +275,46 @@ async function fetchRoute(stops, profile) {
         points: points,
         distanceM: route.distance,
         durationS: route.duration,
+    };
+}
+
+async function fetchRoute(stops, profile) {
+    if (!ALLOWED_PROFILES.has(profile)) {
+        throw new Error('profile must be one of ' + Array.from(ALLOWED_PROFILES).join(', '));
+    }
+    if (!Array.isArray(stops) || stops.length < 2) {
+        throw new Error('need at least 2 stops to build a route');
+    }
+    loadRouteCache();
+    const key = routeCacheKey(stops, profile);
+
+    let route;
+    try {
+        route = await fetchRouteOsrm(stops, profile);
+    } catch (osrmErr) {
+        // OSRM unreachable - fall back to a cached route if we have one.
+        const cached = cacheLookupRoute(key);
+        if (cached) {
+            log.warn({ key: key, cachedAt: cached.cachedAt, err: osrmErr.message },
+                'OSRM unreachable, serving cached route');
+            return {
+                points: cached.points,
+                distanceM: cached.distanceM,
+                durationS: cached.durationS,
+                fromCache: true,
+            };
+        }
+        // Nothing to fall back to - rethrow the original OSRM error.
+        throw osrmErr;
+    }
+
+    // OSRM succeeded - refresh the cache (best-effort) and return live result.
+    cacheStoreRoute(key, route);
+    return {
+        points: route.points,
+        distanceM: route.distanceM,
+        durationS: route.durationS,
+        fromCache: false,
     };
 }
 
@@ -301,7 +447,45 @@ async function startWalk(serial, opts) {
 
     session.timer = setInterval(function() { void tick(serial); }, TICK_INTERVAL_MS);
 
+    // Auto-sync the accelerometer (pose) scenario with this GPS walk. Best-effort:
+    // a pose failure must never break the walk (GPS is the primary function).
+    syncPoseWithWalk(session, profile);
+
     return statusSnapshot(session);
+}
+
+// Start the matching pose scenario for a freshly-started walk, unless one is
+// already running (manual or otherwise) - we never disturb a scenario we did
+// not start. Records on the session whether walk owns the scenario, so
+// stopWalk knows whether to clean it up.
+function syncPoseWithWalk(session, profile) {
+    session.poseStartedByWalk = false;
+    const scenario = PROFILE_TO_SCENARIO[profile];
+    if (!scenario) return; // unmapped profile - nothing to sync
+    if (!_startScenario || !_isScenarioRunning) return; // pose controls not wired
+    try {
+        if (_isScenarioRunning(session.serial)) {
+            // A scenario is already active - leave it untouched.
+            log.info({ serial: session.serial, scenario }, 'Pose scenario already running, not auto-starting');
+            return;
+        }
+        // startScenario is async; mark ownership optimistically and handle a
+        // late rejection without breaking the walk (and without an unhandled
+        // rejection). On failure we clear ownership so stopWalk won't try to
+        // stop a scenario that never started.
+        session.poseStartedByWalk = true;
+        Promise.resolve(_startScenario(session.serial, { scenario: scenario }))
+            .then(function() {
+                log.info({ serial: session.serial, scenario, profile }, 'Auto-started pose scenario for walk');
+            })
+            .catch(function(err) {
+                session.poseStartedByWalk = false;
+                log.warn({ serial: session.serial, scenario, err: err.message }, 'Auto-start of pose scenario failed (walk continues)');
+            });
+    } catch (err) {
+        session.poseStartedByWalk = false;
+        log.warn({ serial: session.serial, scenario, err: err.message }, 'Auto-start of pose scenario failed (walk continues)');
+    }
 }
 
 async function tick(serial) {
@@ -415,6 +599,17 @@ function stopWalk(serial) {
     // drop it as well, otherwise it will outlive the walk.
     if (session.status === 'paused' && _stopGpsKeepAlive) {
         _stopGpsKeepAlive(serial);
+    }
+    // If this walk auto-started the pose scenario, it owns the cleanup.
+    // Never stop a manually-started scenario. Best-effort: a failure here
+    // must not prevent the walk from being torn down.
+    if (session.poseStartedByWalk === true && _stopScenario) {
+        try {
+            _stopScenario(serial);
+            log.info({ serial }, 'Auto-stopped pose scenario started by walk');
+        } catch (err) {
+            log.warn({ serial, err: err.message }, 'Auto-stop of pose scenario failed');
+        }
     }
     walkSessions.delete(serial);
     log.info({ serial }, 'Walk stopped');
