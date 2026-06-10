@@ -9,6 +9,8 @@ const handlers = [
     require('./mic-rtc'),
     require('./mic-state'),
     require('./camera'),
+    require('./file-video'),
+    require('./file-audio'),
     require('./camera-state'),
 ];
 

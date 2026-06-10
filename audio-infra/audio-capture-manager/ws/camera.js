@@ -31,6 +31,11 @@ function handleCamera(ws, url) {
         return true;
     }
 
+    if (camInst.fileInjectActive) {
+        ws.close(4409, 'Camera busy (file injection active)');
+        return true;
+    }
+
     camInst.start(ws);
     return true;
 }

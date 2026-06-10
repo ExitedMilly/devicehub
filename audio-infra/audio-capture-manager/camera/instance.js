@@ -16,6 +16,7 @@ class CameraInstance {
         this.v4l2Device = CAMERA_V4L2_DEVICE;
         this.state = 'idle';
         this.client = null;
+        this.fileInjectActive = false;
         this.startedAt = null;
         this.lastError = null;
         this.bytesReceived = 0;

@@ -30,6 +30,11 @@ function handleMicRtc(ws, url) {
         return true;
     }
 
+    if (micRtcInst.fileInjectActive) {
+        ws.close(4409, 'Mic busy (file injection active)');
+        return true;
+    }
+
     micRtcInst.start(ws);
     return true;
 }
