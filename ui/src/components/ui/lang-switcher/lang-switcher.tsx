@@ -11,17 +11,6 @@ type SupportedLanguages = (typeof SUPPORTED_LANGUAGES)[number]
 
 const OPTION_NAMES: Record<SupportedLanguages, string> = {
   en: 'English',
-  es: 'Español',
-  fr: 'Français',
-  ja: '日本語',
-  ko: '한국어',
-  pl: 'Język polski',
-  ['pt-BR']: 'Português (Brasil)',
-  ['be-BY']: 'Беларуская',
-  ['tt-RU']: 'Татар',
-  ['kk-KZ']: 'Қазақ',
-  ['zh-CN']: '简体中文',
-  ['zh-Hant']: '繁體中文',
 }
 
 const LANGUAGES_OPTIONS: SelectOption<SupportedLanguages>[] = SUPPORTED_LANGUAGES.map((language) => ({

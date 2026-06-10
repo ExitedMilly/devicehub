@@ -3,20 +3,7 @@ import Backend from 'i18next-http-backend'
 import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
 
-export const SUPPORTED_LANGUAGES = [
-  'en',
-  'es',
-  'fr',
-  'ja',
-  'ko',
-  'pl',
-  'pt-BR',
-  'be-BY',
-  'tt-RU',
-  'kk-KZ',
-  'zh-CN',
-  'zh-Hant',
-] as const
+export const SUPPORTED_LANGUAGES = ['en'] as const
 
 i18n
   .use(LanguageDetector)
