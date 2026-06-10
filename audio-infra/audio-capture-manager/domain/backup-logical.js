@@ -23,6 +23,14 @@ const log = require('../log').getLogger('domain/backup-logical');
 
 const BACKUP_DIR = process.env.BACKUP_DIR || '/backups';
 
+// Packages that are part of the DeviceHub/STF infrastructure, not user apps.
+// Must NEVER be backed up or reinstalled: reinstalling the agent restarts it
+// and surfaces it on screen, and it's provisioned by the stack anyway.
+const BACKUP_EXCLUDED_PACKAGES = [
+    'jp.co.cyberagent.stf',        // STFService — DeviceHub on-device agent
+    'jp.co.cyberagent.stf.input',  // STF input agent (if present)
+];
+
 const ADB_QUICK_TIMEOUT_MS      = 10_000;
 const ADB_APK_PULL_TIMEOUT_MS   = 120_000;
 const ADB_APK_INSTALL_TIMEOUT_MS = 180_000;
@@ -82,7 +90,8 @@ async function listThirdPartyPackages(serial) {
         .map(function(l) { return l.trim(); })
         .filter(function(l) { return l.startsWith('package:'); })
         .map(function(l) { return l.substring('package:'.length); })
-        .filter(Boolean);
+        .filter(Boolean)
+        .filter(function(pkg) { return !BACKUP_EXCLUDED_PACKAGES.includes(pkg); });
 }
 
 async function getApkPaths(serial, packageName) {
@@ -443,6 +452,11 @@ async function restoreBackup(serial) {
         for (let i = 0; i < packages.length; i++) {
             checkDeadline();
             const pkg = packages[i];
+            if (BACKUP_EXCLUDED_PACKAGES.includes(pkg.name)) {
+                log.info({ serial, pkg: pkg.name }, 'Skipping excluded infrastructure package on restore');
+                state.donePackages = i + 1;
+                continue;
+            }
             state.currentPackage = pkg.name;
 
             const apkFiles = (pkg.apks || [])
