@@ -381,7 +381,7 @@ async function main() {
 
   const videoArgs = [
     '-hide_banner', '-loglevel', 'error', '-re', '-i', cfg.video,
-    '-vf', `scale=${VIDEO_W}:${VIDEO_H}`, '-pix_fmt', 'yuv420p',
+    '-vf', `scale=${VIDEO_W}:${VIDEO_H}:force_original_aspect_ratio=increase,crop=${VIDEO_W}:${VIDEO_H}`, '-pix_fmt', 'yuv420p',
     '-r', String(VIDEO_FPS), '-f', 'rawvideo', 'pipe:1',
   ];
   const audioArgs = [
