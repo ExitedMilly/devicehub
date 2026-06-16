@@ -51,6 +51,9 @@ walkSimulator.init({
     isScenarioRunning: poseScenario.isScenarioRunning,
     startScenario: poseScenario.startScenario,
     stopScenario: poseScenario.stopScenario,
+    pauseScenario: poseScenario.pauseScenario,
+    resumeScenario: poseScenario.resumeScenario,
+    stopScenarioAndReset: poseScenario.stopScenarioAndReset,
 });
 
 registerAppMetrics();

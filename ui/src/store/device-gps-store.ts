@@ -15,6 +15,7 @@ const STORAGE_KEYS = {
   walkToLon: 'devicehub.walk.toLon',
   walkSpeed: 'devicehub.walk.speed',
   walkProfile: 'devicehub.walk.profile',
+  walkPauseAccelOnPause: 'devicehub.walk.pauseAccelOnPause',
 }
 
 export type WalkSpeedPreset =
@@ -78,6 +79,9 @@ export class DeviceGpsStore {
   walkSpeed: WalkSpeedPreset = 'walking'
   walkProfile: WalkProfile = 'foot'
 
+  // ----- walk automation settings (extensible: more toggles to come) -----
+  walkPauseAccelOnPause = false
+
   walkIsStarting = false
   walkIsControlling = false  // pause/resume/stop in flight
   walkErrorMessage: string | null = null
@@ -101,6 +105,7 @@ export class DeviceGpsStore {
     if (savedProfile === 'foot' || savedProfile === 'bike' || savedProfile === 'driving') {
       this.walkProfile = savedProfile
     }
+    this.walkPauseAccelOnPause = this.readStorage(STORAGE_KEYS.walkPauseAccelOnPause) === 'true'
   }
 
   // ===== existing point GPS methods (unchanged) =====
@@ -264,6 +269,10 @@ export class DeviceGpsStore {
   setWalkToLon(v: string): void   { this.walkToLon = v;   this.writeStorage(STORAGE_KEYS.walkToLon, v) }
   setWalkSpeed(v: WalkSpeedPreset): void { this.walkSpeed = v; this.writeStorage(STORAGE_KEYS.walkSpeed, v) }
   setWalkProfile(v: WalkProfile): void   { this.walkProfile = v; this.writeStorage(STORAGE_KEYS.walkProfile, v) }
+  setWalkPauseAccelOnPause(v: boolean): void {
+    this.walkPauseAccelOnPause = v
+    this.writeStorage(STORAGE_KEYS.walkPauseAccelOnPause, v ? 'true' : 'false')
+  }
 
   get isWalkInputValid(): boolean {
     const coords = [this.walkFromLat, this.walkFromLon, this.walkToLat, this.walkToLon]
@@ -298,6 +307,7 @@ export class DeviceGpsStore {
       jitter: false,
       speedVariance: true,
       keepAliveAfterFinish: true,
+      pauseAccelOnWalkPause: this.walkPauseAccelOnPause,
     }
 
     runInAction(() => {

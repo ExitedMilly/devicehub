@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { useInjection } from 'inversify-react'
-import { Button } from '@vkontakte/vkui'
+import { Button, Checkbox } from '@vkontakte/vkui'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
@@ -27,7 +27,19 @@ const PROFILE_OPTIONS: Array<{ value: WalkProfile; label: string }> = [
 export const GpsButton = observer(() => {
   const gpsStore = useInjection(CONTAINER_IDS.deviceGpsStore)
   const [isOpen, setIsOpen] = useState(false)
+  const [showWalkSettings, setShowWalkSettings] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+
+  // Extensible list of walk automation toggles. Add more rows here (e.g. a
+  // light-sensor sync) and the settings panel renders them automatically.
+  const walkSettings: Array<{ key: string; label: string; value: boolean; setter: (v: boolean) => void }> = [
+    {
+      key: 'pauseAccelOnPause',
+      label: 'Pause accelerometer when walk is paused',
+      value: gpsStore.walkPauseAccelOnPause,
+      setter: (v) => gpsStore.setWalkPauseAccelOnPause(v),
+    },
+  ]
 
   useEffect(() => {
     if (!isOpen) return
@@ -128,7 +140,34 @@ export const GpsButton = observer(() => {
 
           {/* ============== Walk simulation section ============== */}
 
-          <div className={styles.sectionTitle}>Walk simulation</div>
+          <div className={styles.sectionHeader}>
+            <div className={styles.sectionTitle}>Walk simulation</div>
+            <button
+              className={styles.iconButton}
+              type='button'
+              title='Walk settings'
+              aria-label='Walk settings'
+              aria-expanded={showWalkSettings}
+              onClick={() => setShowWalkSettings((s) => !s)}
+            >
+              ⚙
+            </button>
+          </div>
+
+          {showWalkSettings && (
+            <div className={styles.settingsPanel}>
+              {walkSettings.map((s) => (
+                <div key={s.key} className={styles.settingRow}>
+                  <Checkbox
+                    checked={s.value}
+                    onChange={(e) => s.setter(e.target.checked)}
+                  >
+                    {s.label}
+                  </Checkbox>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className={styles.row}>
             <div className={styles.field}>

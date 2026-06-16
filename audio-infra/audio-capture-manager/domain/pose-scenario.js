@@ -105,6 +105,11 @@ const SCENARIOS = {
 
 const ALLOWED_SCENARIOS = new Set(Object.keys(SCENARIOS));
 
+// Neutral "flat" pose (device lying on a table, screen up). Applied once when a
+// walk-owned scenario ends so the accelerometer does not freeze in its last
+// tilted position. See stopScenarioAndReset().
+const NEUTRAL = { pitch: 0, yaw: 0, roll: 0 };
+
 // ============================================================
 // State
 // ============================================================
@@ -365,6 +370,25 @@ function stopScenario(serial) {
     return true;
 }
 
+// Stop the scenario, then return the device to a NEUTRAL (flat) pose.
+// Same teardown as stopScenario (clear timer, close grpc, delete session),
+// followed by a single authoritative flat pose applied via the heavy path -
+// applied AFTER teardown so no remaining tick can overwrite it.
+// Used by the walk simulator when a walk-owned scenario ends, so the
+// accelerometer does not freeze in its last tilted position.
+// Best-effort: the neutral apply never throws.
+async function stopScenarioAndReset(serial) {
+    if (!sessions.has(serial)) return false;
+    stopScenario(serial);
+    try {
+        await _setDevicePoseRotation(serial, NEUTRAL.pitch, NEUTRAL.yaw, NEUTRAL.roll);
+        log.info({ serial, pose: NEUTRAL }, 'Accelerometer reset to neutral pose');
+    } catch (err) {
+        log.warn({ serial, err: err.message }, 'Failed to reset accelerometer to neutral (best-effort)');
+    }
+    return true;
+}
+
 function getStatus(serial) {
     return statusSnapshot(sessions.get(serial));
 }
@@ -403,6 +427,7 @@ module.exports = {
     pauseScenario: pauseScenario,
     resumeScenario: resumeScenario,
     stopScenario: stopScenario,
+    stopScenarioAndReset: stopScenarioAndReset,
     isScenarioRunning: isScenarioRunning,
     getStatus: getStatus,
     getAllStatuses: getAllStatuses,

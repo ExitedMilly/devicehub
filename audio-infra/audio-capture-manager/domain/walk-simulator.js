@@ -65,6 +65,9 @@ let _stopGpsKeepAlive = null;
 let _startScenario = null;
 let _stopScenario = null;
 let _isScenarioRunning = null;
+let _pauseScenario = null;
+let _resumeScenario = null;
+let _resetScenario = null;   // stopScenarioAndReset: stop + return device to flat
 
 function init(deps) {
     _setMockGpsLocation = deps.setMockGpsLocation;
@@ -73,6 +76,9 @@ function init(deps) {
     _startScenario = deps.startScenario;
     _stopScenario = deps.stopScenario;
     _isScenarioRunning = deps.isScenarioRunning;
+    _pauseScenario = deps.pauseScenario;
+    _resumeScenario = deps.resumeScenario;
+    _resetScenario = deps.stopScenarioAndReset;
     loadRouteCache();
 }
 
@@ -399,6 +405,10 @@ async function startWalk(serial, opts) {
         : DEFAULT_JITTER_M;
     const speedVariance = opts.speedVariance !== false;
     const keepAliveAfterFinish = opts.keepAliveAfterFinish !== false;
+    // When true, pausing the walk also pauses the auto-synced accelerometer
+    // scenario (and resuming the walk resumes it). Default false: the
+    // accelerometer keeps ticking through a walk pause.
+    const pauseAccelOnWalkPause = opts.pauseAccelOnWalkPause === true;
 
     _stopGpsKeepAlive(serial);
     stopWalk(serial);
@@ -423,6 +433,7 @@ async function startWalk(serial, opts) {
         jitterMeters: jitterMeters,
         speedVariance: speedVariance,
         keepAliveAfterFinish: keepAliveAfterFinish,
+        pauseAccelOnWalkPause: pauseAccelOnWalkPause,
         accumulatedDistanceM: 0,
         lastTickAt: now,
         lastSpeedSampleAt: now,
@@ -488,6 +499,34 @@ function syncPoseWithWalk(session, profile) {
     }
 }
 
+// Tear down the pose scenario when a walk ends (explicit stop OR natural
+// finish). Only touches a scenario the walk itself started - a manually
+// started scenario is never disturbed. Prefers stopScenarioAndReset so the
+// accelerometer returns to a neutral flat pose instead of freezing tilted;
+// falls back to a plain stop if reset is not wired (older deployments).
+// Best-effort: never throws, never blocks walk teardown.
+function teardownPoseForWalk(serial, session) {
+    if (!session || session.poseStartedByWalk !== true) return;
+    // Clear ownership up-front so a later stop after a natural finish does not
+    // redo the teardown.
+    session.poseStartedByWalk = false;
+    const reset = _resetScenario || _stopScenario;
+    if (!reset) return;
+    try {
+        // stopScenarioAndReset is async (heavy neutral apply); stopScenario is
+        // sync. Promise.resolve() handles both and swallows a late rejection.
+        Promise.resolve(reset(serial))
+            .then(function() {
+                log.info({ serial }, 'Pose scenario torn down on walk end');
+            })
+            .catch(function(err) {
+                log.warn({ serial, err: err.message }, 'Pose teardown failed (walk continues)');
+            });
+    } catch (err) {
+        log.warn({ serial, err: err.message }, 'Pose teardown failed (walk continues)');
+    }
+}
+
 async function tick(serial) {
     const session = walkSessions.get(serial);
     if (!session || session.status !== 'running') return;
@@ -542,6 +581,11 @@ async function finishWalk(serial) {
     const last = session.polyline.points[session.polyline.points.length - 1];
     log.info({ serial, lat: last.lat, lon: last.lon, distanceM: Math.round(session.polyline.total) }, 'Walk finished');
 
+    // A naturally-finished route ends movement too - return the accelerometer
+    // to neutral if this walk auto-started the scenario (never touch a manual
+    // one). Best-effort.
+    teardownPoseForWalk(serial, session);
+
     if (session.keepAliveAfterFinish) {
         try {
             await _startGpsKeepAlive(serial, last.lat, last.lon, 'gps');
@@ -569,6 +613,18 @@ function pauseWalk(serial) {
         });
     }
 
+    // Optionally pause the auto-synced accelerometer scenario alongside the
+    // walk (only if the walk owns it). Best-effort. When the option is off the
+    // accelerometer keeps ticking through the pause.
+    if (session.pauseAccelOnWalkPause && session.poseStartedByWalk === true && _pauseScenario) {
+        try {
+            _pauseScenario(serial);
+            log.info({ serial }, 'Paused pose scenario with walk');
+        } catch (err) {
+            log.warn({ serial, err: err.message }, 'Pause of pose scenario failed (walk continues)');
+        }
+    }
+
     log.info({ serial, coveredM: Math.round(session.accumulatedDistanceM), totalM: Math.round(session.polyline.total) }, 'Walk paused');
     return true;
 }
@@ -587,6 +643,18 @@ function resumeWalk(serial) {
     // the location forward by the entire pause duration.
     session.lastTickAt = Date.now();
     session.timer = setInterval(function() { void tick(serial); }, TICK_INTERVAL_MS);
+
+    // Mirror pauseWalk: resume the accelerometer scenario if the walk paused it.
+    // Best-effort.
+    if (session.pauseAccelOnWalkPause && session.poseStartedByWalk === true && _resumeScenario) {
+        try {
+            _resumeScenario(serial);
+            log.info({ serial }, 'Resumed pose scenario with walk');
+        } catch (err) {
+            log.warn({ serial, err: err.message }, 'Resume of pose scenario failed (walk continues)');
+        }
+    }
+
     log.info({ serial }, 'Walk resumed');
     return true;
 }
@@ -600,17 +668,10 @@ function stopWalk(serial) {
     if (session.status === 'paused' && _stopGpsKeepAlive) {
         _stopGpsKeepAlive(serial);
     }
-    // If this walk auto-started the pose scenario, it owns the cleanup.
-    // Never stop a manually-started scenario. Best-effort: a failure here
-    // must not prevent the walk from being torn down.
-    if (session.poseStartedByWalk === true && _stopScenario) {
-        try {
-            _stopScenario(serial);
-            log.info({ serial }, 'Auto-stopped pose scenario started by walk');
-        } catch (err) {
-            log.warn({ serial, err: err.message }, 'Auto-stop of pose scenario failed');
-        }
-    }
+    // If this walk auto-started the pose scenario, it owns the cleanup and
+    // resets the accelerometer to neutral. Never stop a manually-started
+    // scenario. Best-effort: a failure here must not block walk teardown.
+    teardownPoseForWalk(serial, session);
     walkSessions.delete(serial);
     log.info({ serial }, 'Walk stopped');
     return true;
