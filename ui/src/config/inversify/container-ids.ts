@@ -41,6 +41,7 @@ import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
 import { DeviceGpsStore } from '@/store/device-gps-store'
 import { DevicePoseStore } from '@/store/device-pose-store'
 import { DeviceLightStore } from '@/store/device-light-store'
+import { DeviceBatteryStore } from '@/store/device-battery-store'
 import type { DeviceBackupStore } from '@/store/device-backup-store'
 
 export const CONTAINER_IDS = {
@@ -86,6 +87,7 @@ export const CONTAINER_IDS = {
   deviceGpsStore: Symbol.for('DeviceGpsStore') as interfaces.ServiceIdentifier<DeviceGpsStore>,
   devicePoseStore: Symbol.for('DevicePoseStore') as interfaces.ServiceIdentifier<DevicePoseStore>,
   deviceLightStore: Symbol.for('DeviceLightStore') as interfaces.ServiceIdentifier<DeviceLightStore>,
+  deviceBatteryStore: Symbol.for('DeviceBatteryStore') as interfaces.ServiceIdentifier<DeviceBatteryStore>,
     deviceBackupStore: Symbol.for('DeviceBackupStore') as interfaces.ServiceIdentifier<DeviceBackupStore>,
   factoryTransactionService: Symbol.for(
     'Factory<TransactionService>'
