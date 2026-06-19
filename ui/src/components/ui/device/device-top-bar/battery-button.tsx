@@ -57,7 +57,7 @@ export const BatteryButton = observer(() => {
           </div>
 
           <div className={styles.field}>
-            <label className={styles.label} htmlFor='battery-charging'>На зарядке</label>
+            <label className={styles.label} htmlFor='battery-charging'>Charging</label>
             <Switch
               checked={batteryStore.charging}
               id='battery-charging'

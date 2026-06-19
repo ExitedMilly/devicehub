@@ -11,6 +11,7 @@ const { handleWalk } = require('./routes-walk');
 const { handlePose } = require('./routes-pose');
 const { handleLight } = require('./routes-light');
 const { handleBattery } = require('./routes-battery');
+const { handleNetwork } = require('./routes-network');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
 const { handleFileInject } = require('./routes-file-inject');
@@ -27,6 +28,7 @@ const handlers = [
     handlePose,
     handleLight,
     handleBattery,
+    handleNetwork,
     handleBackup,
     handleVideo,
     handleFileInject,

@@ -17,6 +17,7 @@ import { GpsButton } from './gps-button'
 import { PoseButton } from './pose-button'
 import { LightButton } from './light-button'
 import { BatteryButton } from './battery-button'
+import { NetworkButton } from './network-button'
 import { BackupButton } from './backup-button'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
@@ -95,6 +96,7 @@ export const DeviceTopBar = observer(() => {
         <GpsButton />
         <LightButton />
         <BatteryButton />
+        <NetworkButton />
         <PoseButton />
         <BackupButton />
 

@@ -7,5 +7,6 @@ const gpsSessions = new Map();         // serial → keepalive session
 const poseStates = new Map();          // serial → last applied pose
 const lightStates = new Map();         // serial → last applied light state
 const batteryStates = new Map();       // serial → last read battery state
+const networkStates = new Map();       // serial → last read network state
 
-module.exports = { instances, micRtcInstances, cameraInstances, gpsSessions, poseStates, lightStates, batteryStates };
+module.exports = { instances, micRtcInstances, cameraInstances, gpsSessions, poseStates, lightStates, batteryStates, networkStates };

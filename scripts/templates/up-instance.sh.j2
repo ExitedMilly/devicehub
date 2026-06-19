@@ -18,6 +18,20 @@ fi
 
 readonly EMULATOR_NAME="emulator-{{ instance.name }}"
 readonly CAPTURE_NAME="audio-capture-mgr-{{ instance.name }}"
+readonly TOKEN_FILE="$HOME/caller/console-tokens/${EMULATOR_NAME}"
+
+# console auth-token for the emulator console (telnet) transport used by the
+# network module — one shared file mounted into BOTH the emulator and the
+# capture-mgr. Stable across restarts; create-if-missing; never deleted on down.
+mkdir -p "$(dirname "$TOKEN_FILE")"
+if [ ! -s "$TOKEN_FILE" ]; then
+    printf '%s' "$(openssl rand -hex 8)" > "$TOKEN_FILE"
+fi
+chmod 666 "$TOKEN_FILE"
+
+# IPv6-side network: emulator needs a non-loopback IPv6, else modem_simulator
+# can't connect guest<->modem over ::1 (getaddrinfo rejects loopback-only IPv6).
+docker network create --ipv6 --subnet fd00:1::/64 --subnet 172.31.255.0/24 ipv6side 2>/dev/null || true
 
 # Stop any previous container with the same name
 docker stop "$EMULATOR_NAME" "$CAPTURE_NAME" 2>/dev/null || true
@@ -47,6 +61,7 @@ docker run -d \
     -e AUTH_REQUIRED="${AUTH_REQUIRED:-0}" \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "{{ env.BACKUPS_DIR }}:/backups" \
+    -v "${TOKEN_FILE}:/run/console-token:ro" \
     --device "{{ instance.v4l2_device }}:/dev/video0" \
     -p "{{ instance.manager_port }}:{{ instance.manager_port }}" \
     -p "{{ instance.webrtc_udp_min }}-{{ instance.webrtc_udp_max }}:{{ instance.webrtc_udp_min }}-{{ instance.webrtc_udp_max }}/udp" \
@@ -93,10 +108,15 @@ docker run -d \
     -e QEMU_AUDIO_DRV=pa \
     -e EMULATOR_ADDITIONAL_ARGS="-allow-host-audio -grpc 8554 -camera-front webcam0" \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
+    -v "${TOKEN_FILE}:/home/androidusr/.emulator_console_auth_token" \
     -p "{{ instance.vnc_port }}:6080" \
     -p "{{ instance.adb_port }}:5555" \
     --restart unless-stopped \
     "{{ defaults.emulator_image }}"
+
+# Attach the non-loopback IPv6 side network (secondary) so modem_simulator works.
+# Emulator stays primary on "{{ defaults.docker_network }}" for adb/console.
+docker network connect ipv6side "$EMULATOR_NAME"
 
 echo "[{{ instance.name }}] Waiting for emulator boot (up to 2 minutes)..."
 for i in $(seq 1 24); do
