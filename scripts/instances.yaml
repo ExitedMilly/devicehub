@@ -5,8 +5,21 @@ defaults:
   pulse_volume: devicehub_pulse-sock      # Docker volume name
   docker_network: devicehub_devicehub     # Docker network name
   capture_image: audio-capture-mgr        # locally-built image
-  emulator_image: budtmo/docker-android:emulator_13.0
+  # Operator-identity image: budtmo base + modem-operator shim
+  # (docker/emulator-operator/). Behaves exactly like stock budtmo when no
+  # OP_* env is set; up-scripts build it if missing.
+  emulator_image: orchid-emulator:op
   emulator_device: "Samsung Galaxy S10"
+
+# Optional per-instance operator identity (MCC/MNC + name). Omit to keep the
+# emulator's stock operator (T-Mobile 310-260). Example:
+#   - name: mts1
+#     ...
+#     op_mcc: "250"          # MCC
+#     op_mnc: "01"           # MNC (length matters: "01" = 2-digit, "001" = 3-digit)
+#     op_name: MTS           # network operator long name
+#     op_name_short: MTS     # optional; defaults to op_name
+#     op_roaming: false      # reserved no-op (roaming needs modem_simulator binary patch)
 
 instances:
   - name: test1
@@ -21,6 +34,9 @@ instances:
     vnc_port: 6081
     webrtc_udp_min: 40020
     webrtc_udp_max: 40030
+    op_mcc: "250"
+    op_mnc: "01"
+    op_name: MTS
 
   - name: test2
     serial: "emulator-test2:5555"

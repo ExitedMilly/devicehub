@@ -33,6 +33,13 @@ chmod 666 "$TOKEN_FILE"
 # can't connect guest<->modem over ::1 (getaddrinfo rejects loopback-only IPv6).
 docker network create --ipv6 --subnet fd00:1::/64 --subnet 172.31.255.0/24 ipv6side 2>/dev/null || true
 
+{% set emu_image = instance.emulator_image or defaults.emulator_image %}
+{% if emu_image == 'orchid-emulator:op' %}
+# Build the operator-identity emulator image if missing (idempotent). Behaves
+# like stock budtmo unless OP_* env is set on the emulator run below.
+docker image inspect orchid-emulator:op >/dev/null 2>&1 || \
+    docker build -t orchid-emulator:op "$REPO_ROOT/docker/emulator-operator"
+{% endif %}
 # Stop any previous container with the same name
 docker stop "$EMULATOR_NAME" "$CAPTURE_NAME" 2>/dev/null || true
 docker rm   "$EMULATOR_NAME" "$CAPTURE_NAME" 2>/dev/null || true
@@ -106,13 +113,13 @@ docker run -d \
     -e PULSE_SINK="{{ instance.pulse_sink }}" \
     -e PULSE_SOURCE="{{ instance.pulse_source }}" \
     -e QEMU_AUDIO_DRV=pa \
-    -e EMULATOR_ADDITIONAL_ARGS="-allow-host-audio -grpc 8554 -camera-front webcam0" \
+    -e EMULATOR_ADDITIONAL_ARGS="-allow-host-audio -grpc 8554 -camera-front webcam0"{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "${TOKEN_FILE}:/home/androidusr/.emulator_console_auth_token" \
     -p "{{ instance.vnc_port }}:6080" \
     -p "{{ instance.adb_port }}:5555" \
     --restart unless-stopped \
-    "{{ defaults.emulator_image }}"
+    "{{ emu_image }}"
 
 # Attach the non-loopback IPv6 side network (secondary) so modem_simulator works.
 # Emulator stays primary on "{{ defaults.docker_network }}" for adb/console.

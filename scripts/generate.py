@@ -64,6 +64,16 @@ class Instance:
     vnc_port: int
     webrtc_udp_min: int
     webrtc_udp_max: int
+    # Optional per-instance operator identity (MCC/MNC + name). Empty = stock
+    # operator. op_roaming is reserved (no-op): roaming needs a modem_simulator
+    # binary patch, not achievable via file injection.
+    op_mcc: str = ''
+    op_mnc: str = ''
+    op_name: str = ''
+    op_name_short: str = ''
+    op_roaming: bool = False
+    # Optional per-instance emulator image override (defaults to defaults.emulator_image).
+    emulator_image: Optional[str] = None
 
 
 @dataclass
