@@ -14,6 +14,7 @@ const PRESETS: Array<{ value: ScenarioPreset; label: string }> = [
   { value: 'onCharge', label: 'On charge' },
   { value: 'metro', label: 'Metro' },
   { value: 'reset', label: 'Reset' },
+  { value: 'lowBattery', label: 'Low battery' },
 ]
 
 export const ScenariosButton = observer(() => {
@@ -129,6 +130,59 @@ export const ScenariosButton = observer(() => {
               type='number'
               value={scenarios.rotateIntervalSec}
               onChange={(e) => scenarios.setRotateIntervalSec(Number(e.target.value))}
+            />
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor='scn-drain'>
+              Battery drain{scenarios.batteryDrainEnabled ? ' · running' : ''}
+            </label>
+            <Switch
+              checked={scenarios.batteryDrainEnabled}
+              id='scn-drain'
+              onChange={() => scenarios.toggleBatteryDrain()}
+            />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor='scn-drain-from'>From, %</label>
+            <input
+              className={styles.input}
+              disabled={scenarios.batteryDrainEnabled}
+              id='scn-drain-from'
+              max={100}
+              min={1}
+              type='number'
+              value={scenarios.drainStartPct}
+              onBlur={(e) => scenarios.setDrainStart(Number(e.target.value))}
+              onChange={(e) => scenarios.setDrainStart(Number(e.target.value))}
+            />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor='scn-drain-to'>To, %</label>
+            <input
+              className={styles.input}
+              disabled={scenarios.batteryDrainEnabled}
+              id='scn-drain-to'
+              max={99}
+              min={0}
+              type='number'
+              value={scenarios.drainFloorPct}
+              onBlur={(e) => scenarios.setDrainFloor(Number(e.target.value))}
+              onChange={(e) => scenarios.setDrainFloor(Number(e.target.value))}
+            />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor='scn-drain-every'>1% every, s</label>
+            <input
+              className={styles.input}
+              disabled={scenarios.batteryDrainEnabled}
+              id='scn-drain-every'
+              max={600}
+              min={2}
+              type='number'
+              value={scenarios.drainIntervalSec}
+              onBlur={(e) => scenarios.setDrainInterval(Number(e.target.value))}
+              onChange={(e) => scenarios.setDrainInterval(Number(e.target.value))}
             />
           </div>
         </div>

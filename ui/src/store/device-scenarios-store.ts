@@ -39,13 +39,29 @@ const MIN_CYCLE_PERIOD_SEC = 4
 const DEFAULT_ROTATE_INTERVAL_SEC = 20
 const MIN_ROTATE_INTERVAL_SEC = 2
 
+// "Low battery" preset target (%).
+const LOW_BATTERY_PCT = 15
+
+// Ambient: battery drain bounds/cadence.
+const DEFAULT_DRAIN_START_PCT = 100
+const DEFAULT_DRAIN_FLOOR_PCT = 5
+const DEFAULT_DRAIN_INTERVAL_SEC = 6
+const MIN_DRAIN_INTERVAL_SEC = 2
+const MAX_DRAIN_INTERVAL_SEC = 600
+
 // Small gap between module calls inside a preset so the emulator isn't hammered.
 const STEP_DELAY_MS = 150
 
-export type ScenarioPreset = 'onCharge' | 'metro' | 'reset'
+export type ScenarioPreset = 'onCharge' | 'metro' | 'reset' | 'lowBattery'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function clampInt(value: number, lo: number, hi: number): number {
+  const n = Math.round(Number(value))
+  if (!Number.isFinite(n)) return lo
+  return Math.max(lo, Math.min(hi, n))
 }
 
 @injectable()
@@ -61,6 +77,11 @@ export class DeviceScenariosStore {
   cyclePeriodSec = DEFAULT_CYCLE_PERIOD_SEC
   rotateIntervalSec = DEFAULT_ROTATE_INTERVAL_SEC
 
+  batteryDrainEnabled = false
+  drainStartPct = DEFAULT_DRAIN_START_PCT
+  drainFloorPct = DEFAULT_DRAIN_FLOOR_PCT
+  drainIntervalSec = DEFAULT_DRAIN_INTERVAL_SEC
+
   // ----- internal (non-observable) timer/loop state -----
   private cycleTimer: number | null = null
   private rotateTimer: number | null = null
@@ -68,6 +89,9 @@ export class DeviceScenariosStore {
   private cycleBusy = false
   private rotateBusy = false
   private rotateState = false
+  private drainTimer: number | null = null
+  private drainCounter = 0
+  private drainBusy = false
 
   constructor(
     @inject(CONTAINER_IDS.deviceLightStore) private light: DeviceLightStore,
@@ -101,6 +125,13 @@ export class DeviceScenariosStore {
           async () => { this.light.applyPreset(LUX.neutral); await this.light.apply() },
           async () => { this.pose.applyPreset(POSE_UPRIGHT.pitch, POSE_UPRIGHT.yaw, POSE_UPRIGHT.roll); await this.pose.apply() },
           async () => { this.network.setSignalStrong(true); this.network.setAirplane(false); await this.network.apply() },
+          async () => { this.battery.setCharging(false); await this.battery.apply() },
+        ])
+        break
+      case 'lowBattery':
+        // Low charge, off the charger.
+        void this.runSteps(name, [
+          async () => { this.battery.setLevel(LOW_BATTERY_PCT); await this.battery.apply() },
           async () => { this.battery.setCharging(false); await this.battery.apply() },
         ])
         break
@@ -223,6 +254,70 @@ export class DeviceScenariosStore {
     }
   }
 
+  // ===================== Ambient: battery drain =====================
+
+  setDrainStart(value: number): void {
+    this.drainStartPct = clampInt(value, 1, 100)
+  }
+
+  setDrainFloor(value: number): void {
+    this.drainFloorPct = clampInt(value, 0, 99)
+  }
+
+  setDrainInterval(value: number): void {
+    this.drainIntervalSec = clampInt(value, MIN_DRAIN_INTERVAL_SEC, MAX_DRAIN_INTERVAL_SEC)
+  }
+
+  toggleBatteryDrain(): void {
+    if (!this.batteryDrainEnabled) this.startDrain()
+    else this.stopDrain()
+  }
+
+  // Effective floor is always strictly below the start, so the drain always moves.
+  private effectiveDrainFloor(): number {
+    const start = clampInt(this.drainStartPct, 1, 100)
+    return clampInt(this.drainFloorPct, 0, start - 1)
+  }
+
+  private startDrain(): void {
+    if (this.drainTimer !== null) return
+    const start = clampInt(this.drainStartPct, 1, 100)
+    this.drainCounter = start
+    // Draining while charging is meaningless — force charging off.
+    this.battery.setCharging(false)
+    this.battery.setLevel(this.drainCounter)
+    void this.battery.apply()
+    this.batteryDrainEnabled = true
+    const intervalMs = clampInt(this.drainIntervalSec, MIN_DRAIN_INTERVAL_SEC, MAX_DRAIN_INTERVAL_SEC) * 1000
+    this.drainTimer = window.setInterval(() => { void this.drainTick() }, intervalMs)
+  }
+
+  private async drainTick(): Promise<void> {
+    if (this.drainBusy) return
+    this.drainBusy = true
+    try {
+      const floor = this.effectiveDrainFloor()
+      if (this.drainCounter <= floor) { this.stopDrain(); return }
+      this.drainCounter = Math.max(floor, this.drainCounter - 1)
+      this.battery.setLevel(this.drainCounter)
+      await this.battery.apply()
+      if (this.drainCounter <= floor) this.stopDrain()
+    } catch {
+      // ignore transient failures; next tick retries
+    } finally {
+      runInAction(() => { this.drainBusy = false })
+    }
+  }
+
+  private stopDrain(): void {
+    if (this.drainTimer !== null) {
+      window.clearInterval(this.drainTimer)
+      this.drainTimer = null
+    }
+    // Safe whether called synchronously (toggle) or post-await (tick reached floor).
+    runInAction(() => { this.batteryDrainEnabled = false })
+  }
+
   get statusText(): string | null {
     if (this.errorMessage) return this.errorMessage
     if (this.busyPreset) return `Applying: ${this.busyPreset}…`
@@ -234,6 +329,7 @@ export class DeviceScenariosStore {
   dispose(): void {
     this.stopCycle(false)
     this.stopRotate()
+    this.stopDrain()
     runInAction(() => {
       this.cycleOn = false
       this.rotateOn = false
