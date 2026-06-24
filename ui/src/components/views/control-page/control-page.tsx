@@ -24,8 +24,8 @@ export const ControlPage = observer(() => {
         className={styles.split}
         direction='horizontal'
         gutterSize={8}
-        minSize={[200, 0]}
-        sizes={[28, 72]}
+        minSize={[320, 180]}
+        sizes={[80, 20]}
         snapOffset={10}
       >
         <Device />
