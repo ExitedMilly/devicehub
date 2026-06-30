@@ -8,6 +8,7 @@ import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import topBarStyles from './device-top-bar.module.css'
 import styles from './pose-button.module.css'
 
+import type { CSSProperties } from 'react'
 import type { ScenarioPreset } from '@/store/device-scenarios-store'
 
 const PRESETS: Array<{ value: ScenarioPreset; label: string }> = [
@@ -16,6 +17,13 @@ const PRESETS: Array<{ value: ScenarioPreset; label: string }> = [
   { value: 'reset', label: 'Reset' },
   { value: 'lowBattery', label: 'Low battery' },
 ]
+
+// Active preset gets a green (positive) tint + label colour. The .presetButton
+// class keeps padding/border-radius constant, so only colours change (no jump).
+const PRESET_ACTIVE: CSSProperties = {
+  background: 'var(--vkui--color_background_positive_tint)',
+  color: 'var(--vkui--color_text_positive)',
+}
 
 export const ScenariosButton = observer(() => {
   const scenarios = useInjection(CONTAINER_IDS.deviceScenariosStore)
@@ -69,6 +77,7 @@ export const ScenariosButton = observer(() => {
                 key={p.value}
                 className={styles.presetButton}
                 disabled={scenarios.busyPreset !== null}
+                style={scenarios.isPresetActive(p.value) ? PRESET_ACTIVE : undefined}
                 type='button'
                 onClick={() => scenarios.applyPreset(p.value)}
               >
@@ -90,9 +99,7 @@ export const ScenariosButton = observer(() => {
           <div className={styles.sectionTitle}>Ambient</div>
 
           <div className={styles.field}>
-            <label className={styles.label} htmlFor='scn-cycle'>
-              Day / Night cycle{scenarios.cycleOn ? ' · running' : ''}
-            </label>
+            <label className={styles.label} htmlFor='scn-cycle'>Day / Night cycle</label>
             <Switch
               checked={scenarios.cycleOn}
               id='scn-cycle'
@@ -112,9 +119,7 @@ export const ScenariosButton = observer(() => {
           </div>
 
           <div className={styles.field}>
-            <label className={styles.label} htmlFor='scn-rotate'>
-              Periodic rotation{scenarios.rotateOn ? ' · running' : ''}
-            </label>
+            <label className={styles.label} htmlFor='scn-rotate'>Periodic rotation</label>
             <Switch
               checked={scenarios.rotateOn}
               id='scn-rotate'
@@ -134,9 +139,7 @@ export const ScenariosButton = observer(() => {
           </div>
 
           <div className={styles.field}>
-            <label className={styles.label} htmlFor='scn-drain'>
-              Battery drain{scenarios.batteryDrainEnabled ? ' · running' : ''}
-            </label>
+            <label className={styles.label} htmlFor='scn-drain'>Battery drain</label>
             <Switch
               checked={scenarios.batteryDrainEnabled}
               id='scn-drain'

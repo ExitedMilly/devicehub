@@ -54,6 +54,31 @@ const STEP_DELAY_MS = 150
 
 export type ScenarioPreset = 'onCharge' | 'metro' | 'reset' | 'lowBattery'
 
+// Device resources a scenario can own. Used for anti-collision between ambient
+// scenarios and one-shot presets (preset always wins).
+export type ScenarioResource = 'light' | 'pose' | 'signal' | 'charging' | 'batteryLevel'
+
+type AmbientId = 'dayNight' | 'rotation' | 'drain'
+
+// Stable key for any active resource owner — an ambient scenario or a preset.
+// Lets preemption treat both kinds uniformly (no per-pair logic).
+type OwnerKey = `ambient:${AmbientId}` | `preset:${ScenarioPreset}`
+
+// Owned resources per ambient scenario (drives generic preemption).
+const AMBIENT_META: Record<AmbientId, { resources: ScenarioResource[] }> = {
+  dayNight: { resources: ['light'] },
+  rotation: { resources: ['pose'] },
+  drain: { resources: ['batteryLevel'] },
+}
+
+// Resources each preset writes. `reset` is special-cased (stops ALL ambient).
+const PRESET_RESOURCES: Record<ScenarioPreset, ScenarioResource[]> = {
+  onCharge: ['charging', 'pose', 'light'],
+  metro: ['light', 'signal'],
+  lowBattery: ['batteryLevel', 'charging'],
+  reset: [],
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -69,6 +94,9 @@ function clampInt(value: number, lo: number, hi: number): number {
 export class DeviceScenariosStore {
   // ----- observable UI state -----
   busyPreset: ScenarioPreset | null = null
+  // Presets currently "active" (own their resources). Several may coexist while
+  // their resources are disjoint. `reset` is never added here.
+  activePresets = new Set<ScenarioPreset>()
   errorMessage: string | null = null
   statusMessage: string | null = null
 
@@ -102,39 +130,125 @@ export class DeviceScenariosStore {
     makeAutoObservable(this)
   }
 
+  // ===================== Resource model / preemption =====================
+  // Generic, map-driven collision handling: a scenario being activated preempts
+  // (stops) every running ambient whose owned resources intersect its own.
+  // Newest wins. Adding a scenario = a new entry in AMBIENT_META / PRESET_RESOURCES;
+  // the preemption logic below never needs per-pair changes.
+
+  private isAmbientOn(id: AmbientId): boolean {
+    switch (id) {
+      case 'dayNight': return this.cycleOn
+      case 'rotation': return this.rotateOn
+      case 'drain': return this.batteryDrainEnabled
+    }
+  }
+
+  // Currently-running ambient scenarios + their owned resources.
+  private get activeAmbients(): Array<{ id: AmbientId; resources: ScenarioResource[] }> {
+    return (Object.keys(AMBIENT_META) as AmbientId[])
+      .filter((id) => this.isAmbientOn(id))
+      .map((id) => ({ id, resources: AMBIENT_META[id].resources }))
+  }
+
+  private resourcesOf(name: ScenarioPreset): ScenarioResource[] {
+    return PRESET_RESOURCES[name]
+  }
+
+  // True when a preset is the current active owner of its resources (drives the
+  // green highlight). `reset` is never active.
+  isPresetActive(name: ScenarioPreset): boolean {
+    return this.activePresets.has(name)
+  }
+
+  // Unified view of every active resource owner — ambient scenarios AND active
+  // presets — each with its resources + a deactivate() action. This uniformity
+  // is what keeps preemption pair-agnostic.
+  private activeOwners(): Array<{ key: OwnerKey; resources: ScenarioResource[]; deactivate: () => void }> {
+    const owners: Array<{ key: OwnerKey; resources: ScenarioResource[]; deactivate: () => void }> = []
+    for (const a of this.activeAmbients) {
+      owners.push({ key: `ambient:${a.id}`, resources: a.resources, deactivate: () => this.stopAmbientById(a.id) })
+    }
+    for (const name of this.activePresets) {
+      owners.push({ key: `preset:${name}`, resources: this.resourcesOf(name), deactivate: () => { this.activePresets.delete(name) } })
+    }
+    return owners
+  }
+
+  // Deactivate every active owner (ambient OR preset) whose resources intersect
+  // `resources`, except `exceptKey`. The single, generic, map-driven collision
+  // rule — newest wins, no per-pair branches.
+  private preemptConflicting(resources: ScenarioResource[], exceptKey?: OwnerKey): void {
+    for (const o of this.activeOwners()) {
+      if (o.key === exceptKey) continue
+      if (o.resources.some((r) => resources.includes(r))) o.deactivate()
+    }
+  }
+
+  // Stop an ambient via its normal stop path (no neutral light reset — the new
+  // scenario is about to take that resource over).
+  private stopAmbientById(id: AmbientId): void {
+    switch (id) {
+      case 'dayNight':
+        this.cycleOn = false
+        this.stopCycle(false)
+        break
+      case 'rotation':
+        this.rotateOn = false
+        this.stopRotate()
+        break
+      case 'drain':
+        this.stopDrain()
+        break
+    }
+  }
+
   // ===================== Presets (one-shot) =====================
 
   applyPreset(name: ScenarioPreset): void {
+    if (name === 'reset') {
+      // Reset returns everything to neutral: stop all ambient, clear every
+      // active preset, then run the neutral steps. Reset itself never stays active.
+      for (const a of [...this.activeAmbients]) this.stopAmbientById(a.id)
+      this.activePresets.clear()
+      void this.runSteps(name, this.buildPresetSteps(name))
+      return
+    }
+    // Newest wins: preempt every conflicting owner (ambient OR preset), then mark
+    // this preset active and run its steps. Re-clicking an active preset just
+    // re-applies it (idempotent) and keeps it active.
+    this.preemptConflicting(this.resourcesOf(name), `preset:${name}`)
+    this.activePresets.add(name)
+    void this.runSteps(name, this.buildPresetSteps(name))
+  }
+
+  private buildPresetSteps(name: ScenarioPreset): Array<() => Promise<void>> {
     switch (name) {
       case 'onCharge':
-        void this.runSteps(name, [
+        return [
           async () => { this.battery.setCharging(true); await this.battery.apply() },
           async () => { this.pose.applyPreset(POSE_FLAT.pitch, POSE_FLAT.yaw, POSE_FLAT.roll); await this.pose.apply() },
           async () => { this.light.applyPreset(LUX.onChargeDark); await this.light.apply() },
-        ])
-        break
+        ]
       case 'metro':
         // Weak signal + low light. Does not touch GPS or airplane mode.
-        void this.runSteps(name, [
+        return [
           async () => { this.network.setSignalStrong(false); await this.network.apply() },
           async () => { this.light.applyPreset(LUX.metroLow); await this.light.apply() },
-        ])
-        break
+        ]
       case 'reset':
-        void this.runSteps(name, [
+        return [
           async () => { this.light.applyPreset(LUX.neutral); await this.light.apply() },
           async () => { this.pose.applyPreset(POSE_UPRIGHT.pitch, POSE_UPRIGHT.yaw, POSE_UPRIGHT.roll); await this.pose.apply() },
           async () => { this.network.setSignalStrong(true); this.network.setAirplane(false); await this.network.apply() },
           async () => { this.battery.setCharging(false); await this.battery.apply() },
-        ])
-        break
+        ]
       case 'lowBattery':
         // Low charge, off the charger.
-        void this.runSteps(name, [
+        return [
           async () => { this.battery.setLevel(LOW_BATTERY_PCT); await this.battery.apply() },
           async () => { this.battery.setCharging(false); await this.battery.apply() },
-        ])
-        break
+        ]
     }
   }
 
@@ -162,9 +276,14 @@ export class DeviceScenariosStore {
   // ===================== Ambient: Day/Night light cycle =====================
 
   setCycleOn(value: boolean): void {
-    this.cycleOn = value
-    if (value) this.startCycle()
-    else this.stopCycle(true)
+    if (value) {
+      this.preemptConflicting(AMBIENT_META.dayNight.resources, 'ambient:dayNight')
+      this.cycleOn = true
+      this.startCycle()
+    } else {
+      this.cycleOn = false
+      this.stopCycle(true)
+    }
   }
 
   setCyclePeriodSec(value: number): void {
@@ -214,9 +333,14 @@ export class DeviceScenariosStore {
   // ===================== Ambient: periodic rotation =====================
 
   setRotateOn(value: boolean): void {
-    this.rotateOn = value
-    if (value) this.startRotate()
-    else this.stopRotate()
+    if (value) {
+      this.preemptConflicting(AMBIENT_META.rotation.resources, 'ambient:rotation')
+      this.rotateOn = true
+      this.startRotate()
+    } else {
+      this.rotateOn = false
+      this.stopRotate()
+    }
   }
 
   setRotateIntervalSec(value: number): void {
@@ -269,8 +393,12 @@ export class DeviceScenariosStore {
   }
 
   toggleBatteryDrain(): void {
-    if (!this.batteryDrainEnabled) this.startDrain()
-    else this.stopDrain()
+    if (!this.batteryDrainEnabled) {
+      this.preemptConflicting(AMBIENT_META.drain.resources, 'ambient:drain')
+      this.startDrain()
+    } else {
+      this.stopDrain()
+    }
   }
 
   // Effective floor is always strictly below the start, so the drain always moves.
@@ -333,6 +461,7 @@ export class DeviceScenariosStore {
     runInAction(() => {
       this.cycleOn = false
       this.rotateOn = false
+      this.activePresets.clear()
     })
   }
 }
