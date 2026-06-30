@@ -28,3 +28,14 @@ diagnose-audio.sh
 scripts/instances.local.env
 # Generated bring-up artifacts (produced by scripts/generate.py)
 scripts/generated/
+
+# local tooling / junk
+.claude/
+scripts/__pycache__/
+*.backup
+
+# local tooling / secrets / junk
+.claude/
+scripts/__pycache__/
+scripts/variables.env
+*.backup
