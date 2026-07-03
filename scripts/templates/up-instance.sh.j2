@@ -121,7 +121,7 @@ docker run -d \
     -e PULSE_SINK="{{ instance.pulse_sink }}" \
     -e PULSE_SOURCE="{{ instance.pulse_source }}" \
     -e QEMU_AUDIO_DRV=pa \
-    -e EMULATOR_ADDITIONAL_ARGS={{ eaa_q }}-allow-host-audio -grpc 8554 -camera-front webcam0{% if instance.wifi_ssid %} -netsim-args "--wifi {{ instance.wifi_ssid }}{% if instance.wifi_password %} {{ instance.wifi_password }}{% endif %}"{% endif %}{{ eaa_q }}{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %} \
+    -e EMULATOR_ADDITIONAL_ARGS={{ eaa_q }}-allow-host-audio -grpc 8554 -camera-front webcam0{% if instance.wifi_ssid %} -netsim-args "--wifi {{ instance.wifi_ssid }}{% if instance.wifi_password %} {{ instance.wifi_password }}{% endif %}"{% endif %}{{ eaa_q }}{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %}{% if instance.phone_number %} -e PHONE_NUMBER="{{ instance.phone_number }}"{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "${TOKEN_FILE}:/home/androidusr/.emulator_console_auth_token" \
     -p "{{ instance.vnc_port }}:6080" \

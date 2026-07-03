@@ -76,6 +76,9 @@ class Instance:
     # Empty = stock open network (AndroidWifi). Password (8+ chars) => WPA2/CCMP.
     wifi_ssid: Optional[str] = None
     wifi_password: Optional[str] = None
+    # Optional per-instance phone number (digits only). Applied via the emulator
+    # console after boot; empty leaves the emulator default.
+    phone_number: Optional[str] = None
     # Optional per-instance emulator image override (defaults to defaults.emulator_image).
     emulator_image: Optional[str] = None
 

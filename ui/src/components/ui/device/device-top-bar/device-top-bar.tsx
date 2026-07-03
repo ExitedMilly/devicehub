@@ -19,6 +19,7 @@ import { LightButton } from './light-button'
 import { BatteryButton } from './battery-button'
 import { NetworkButton } from './network-button'
 import { ProxyButton } from './proxy-button'
+import { PhonenumberButton } from './phonenumber-button'
 import { ScenariosButton } from './scenarios-button'
 import { BackupButton } from './backup-button'
 
@@ -100,6 +101,7 @@ export const DeviceTopBar = observer(() => {
         <BatteryButton />
         <NetworkButton />
         <ProxyButton />
+        <PhonenumberButton />
         <PoseButton />
         <ScenariosButton />
         <BackupButton />

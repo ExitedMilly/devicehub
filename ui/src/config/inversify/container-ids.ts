@@ -45,6 +45,7 @@ import { DeviceBatteryStore } from '@/store/device-battery-store'
 import { DeviceNetworkStore } from '@/store/device-network-store'
 import { DeviceScenariosStore } from '@/store/device-scenarios-store'
 import { DeviceProxyStore } from '@/store/device-proxy-store'
+import { DevicePhonenumberStore } from '@/store/device-phonenumber-store'
 import type { DeviceBackupStore } from '@/store/device-backup-store'
 
 export const CONTAINER_IDS = {
@@ -94,6 +95,7 @@ export const CONTAINER_IDS = {
   deviceNetworkStore: Symbol.for('DeviceNetworkStore') as interfaces.ServiceIdentifier<DeviceNetworkStore>,
   deviceScenariosStore: Symbol.for('DeviceScenariosStore') as interfaces.ServiceIdentifier<DeviceScenariosStore>,
   deviceProxyStore: Symbol.for('DeviceProxyStore') as interfaces.ServiceIdentifier<DeviceProxyStore>,
+  devicePhonenumberStore: Symbol.for('DevicePhonenumberStore') as interfaces.ServiceIdentifier<DevicePhonenumberStore>,
     deviceBackupStore: Symbol.for('DeviceBackupStore') as interfaces.ServiceIdentifier<DeviceBackupStore>,
   factoryTransactionService: Symbol.for(
     'Factory<TransactionService>'

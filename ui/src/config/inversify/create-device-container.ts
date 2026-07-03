@@ -29,6 +29,7 @@ import { DeviceBatteryStore } from '@/store/device-battery-store'
 import { DeviceNetworkStore } from '@/store/device-network-store'
 import { DeviceScenariosStore } from '@/store/device-scenarios-store'
 import { DeviceProxyStore } from '@/store/device-proxy-store'
+import { DevicePhonenumberStore } from '@/store/device-phonenumber-store'
 import { DeviceBackupStore } from '@/store/device-backup-store'
 
 import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
@@ -78,6 +79,7 @@ export const createDeviceContainer = (serial: string): Container => {
   deviceContainer.bind(CONTAINER_IDS.deviceNetworkStore).to(DeviceNetworkStore)
   deviceContainer.bind(CONTAINER_IDS.deviceScenariosStore).to(DeviceScenariosStore)
   deviceContainer.bind(CONTAINER_IDS.deviceProxyStore).to(DeviceProxyStore)
+  deviceContainer.bind(CONTAINER_IDS.devicePhonenumberStore).to(DevicePhonenumberStore)
   deviceContainer.bind(CONTAINER_IDS.deviceBackupStore).to(DeviceBackupStore)
 
   return deviceContainer

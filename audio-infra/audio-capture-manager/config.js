@@ -61,6 +61,10 @@ const PULSE_SOURCE_NAME = process.env.PULSE_SOURCE_NAME || null;
 const WIFI_SSID = process.env.WIFI_SSID || null;
 const WIFI_PASSWORD = process.env.WIFI_PASSWORD || null;
 
+// Optional: emulator phone number (digits only). When set, the manager applies
+// it via the telnet console after boot. Empty => leave the emulator default.
+const PHONE_NUMBER = process.env.PHONE_NUMBER || null;
+
 // Auth config (P0.6)
 const STF_SECRET = process.env.STF_SECRET || null;
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === '1';
@@ -86,7 +90,7 @@ module.exports = {
     INSTANCE_SERIAL, SINGLE_MODE,
     EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
     PULSE_SINK_NAME, PULSE_SOURCE_NAME,
-    WIFI_SSID, WIFI_PASSWORD,
+    WIFI_SSID, WIFI_PASSWORD, PHONE_NUMBER,
     STF_SECRET, AUTH_REQUIRED,
     DEVICEHUB_API_HOST, DEVICEHUB_API_PORT,
     OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS,

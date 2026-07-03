@@ -13,6 +13,7 @@ const { handleLight } = require('./routes-light');
 const { handleBattery } = require('./routes-battery');
 const { handleNetwork } = require('./routes-network');
 const { handleProxy } = require('./routes-proxy');
+const { handlePhonenumber } = require('./routes-phonenumber');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
 const { handleFileInject } = require('./routes-file-inject');
@@ -31,6 +32,7 @@ const handlers = [
     handleBattery,
     handleNetwork,
     handleProxy,
+    handlePhonenumber,
     handleBackup,
     handleVideo,
     handleFileInject,

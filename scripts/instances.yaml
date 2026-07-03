@@ -31,6 +31,12 @@ defaults:
 #     wifi_ssid: OrchidNet
 #     wifi_password: "orchidpass"
 
+# Optional per-instance phone number (digits only, no leading +). When set, the
+# manager applies it via the emulator console after boot. Omit to keep default.
+#   - name: phone1
+#     ...
+#     phone_number: "79001234567"
+
 instances:
   - name: test1
     # name → container names: emulator-{name}, audio-capture-mgr-{name}
@@ -77,3 +83,4 @@ instances:
     emulator_image: orchid-emulator:op-v2
     wifi_ssid: OrchidNet
     wifi_password: "orchidpass"
+    phone_number: "79001234567"
