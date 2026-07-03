@@ -13,6 +13,7 @@ const { handleLight } = require('./routes-light');
 const { handleBattery } = require('./routes-battery');
 const { handleNetwork } = require('./routes-network');
 const { handleProxy } = require('./routes-proxy');
+const { handleFakeScan } = require('./routes-fake-scan');
 const { handlePhonenumber } = require('./routes-phonenumber');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
@@ -32,6 +33,7 @@ const handlers = [
     handleBattery,
     handleNetwork,
     handleProxy,
+    handleFakeScan,
     handlePhonenumber,
     handleBackup,
     handleVideo,

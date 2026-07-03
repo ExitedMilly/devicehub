@@ -12,10 +12,24 @@ const STORAGE_KEYS = {
   registration: 'devicehub.network.registration',
   wifi: 'devicehub.network.wifi',
   airplane: 'devicehub.network.airplane',
+  fakeNetworks: 'devicehub.network.fakeNetworks',
 }
 
 const NETWORK_TYPES = ['gprs', 'edge', 'umts', 'hsdpa', 'lte']
 const REGISTRATION_STATES = ['home', 'roaming', 'searching', 'unregistered']
+
+export type FakeSecurity = 'open' | 'wpa2' | 'wpa3'
+export interface FakeNetwork {
+  ssid: string
+  security: FakeSecurity
+  signalDbm: string
+}
+
+const FAKE_SECURITIES: FakeSecurity[] = ['open', 'wpa2', 'wpa3']
+
+function defaultFakeNetwork(): FakeNetwork {
+  return { ssid: '', security: 'wpa2', signalDbm: '-50' }
+}
 
 @injectable()
 @deviceConnectionRequired()
@@ -30,6 +44,13 @@ export class DeviceNetworkStore {
   errorMessage: string | null = null
   statusMessage: string | null = null
   lastAppliedAt: number | null = null
+
+  // ----- fake Wi-Fi scan (section inside the Network popup) -----
+  fakeNetworks: FakeNetwork[] = [defaultFakeNetwork()]
+  fakingActive = false
+  fakeIsApplying = false
+  fakeErrorMessage: string | null = null
+  fakeStatusMessage: string | null = null
 
   constructor(
     @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore
@@ -46,6 +67,22 @@ export class DeviceNetworkStore {
     if (savedWifi === 'true' || savedWifi === 'false') this.wifi = savedWifi === 'true'
     const savedAirplane = this.readStorage(STORAGE_KEYS.airplane)
     if (savedAirplane === 'true' || savedAirplane === 'false') this.airplane = savedAirplane === 'true'
+
+    const savedFake = this.readStorage(STORAGE_KEYS.fakeNetworks)
+    if (savedFake) {
+      try {
+        const parsed = JSON.parse(savedFake)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this.fakeNetworks = parsed.map((n) => ({
+            ssid: String(n?.ssid ?? ''),
+            security: FAKE_SECURITIES.includes(n?.security) ? n.security : 'wpa2',
+            signalDbm: String(n?.signalDbm ?? '-50'),
+          }))
+        }
+      } catch {
+        // ignore malformed saved list
+      }
+    }
   }
 
   setSignalStrong(value: boolean): void {
@@ -137,6 +174,113 @@ export class DeviceNetworkStore {
 
     const date = new Date(this.lastAppliedAt)
     return `Applied at ${date.toLocaleTimeString()}`
+  }
+
+  // ===================== Fake Wi-Fi scan =====================
+
+  addFakeNetwork(): void {
+    this.fakeNetworks.push(defaultFakeNetwork())
+    this.persistFakeNetworks()
+  }
+
+  removeFakeNetwork(index: number): void {
+    this.fakeNetworks.splice(index, 1)
+    this.persistFakeNetworks()
+  }
+
+  updateFakeNetwork(index: number, patch: Partial<FakeNetwork>): void {
+    const cur = this.fakeNetworks[index]
+    if (!cur) return
+    this.fakeNetworks[index] = { ...cur, ...patch }
+    this.persistFakeNetworks()
+  }
+
+  get isFakeValid(): boolean {
+    if (this.fakeNetworks.length === 0) return false
+    return this.fakeNetworks.every((n) => {
+      const ssid = n.ssid.trim()
+      const dbm = Number(n.signalDbm)
+      return ssid.length > 0 && ssid.length <= 32 && !/\s/.test(ssid) &&
+        Number.isInteger(dbm) && dbm >= -100 && dbm <= -30
+    })
+  }
+
+  async fetchFakeScanState(): Promise<void> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) return
+    try {
+      const url = `/manager-api/fake-scan/${encodeURIComponent(device.serial)}`
+      const response = await managerApiFetch(url)
+      const data = await response.json().catch(() => null)
+      if (!response.ok || !data?.ok) return
+      runInAction(() => { this.fakingActive = !!data.faking })
+    } catch {
+      // ignore transient failures
+    }
+  }
+
+  async applyFakeScan(): Promise<void> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) {
+      runInAction(() => { this.fakeErrorMessage = 'Device serial not found' })
+      return
+    }
+    if (!this.isFakeValid) {
+      runInAction(() => { this.fakeErrorMessage = 'Each network needs an SSID (no spaces) and a dBm between -100 and -30' })
+      return
+    }
+
+    runInAction(() => { this.fakeIsApplying = true; this.fakeErrorMessage = null; this.fakeStatusMessage = null })
+    try {
+      const url = `/manager-api/fake-scan/${encodeURIComponent(device.serial)}`
+      const response = await managerApiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          networks: this.fakeNetworks.map((n) => ({ ssid: n.ssid.trim(), security: n.security, signalDbm: Number(n.signalDbm) })),
+        }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok || !data?.ok) throw new Error(data?.error || `HTTP ${response.status}`)
+      runInAction(() => {
+        this.fakingActive = !!data.faking
+        this.fakeStatusMessage = `Faking ${Array.isArray(data.networks) ? data.networks.length : 0} network(s)`
+      })
+    } catch (error) {
+      runInAction(() => { this.fakeErrorMessage = error instanceof Error ? error.message : 'Failed to apply fake scan' })
+    } finally {
+      runInAction(() => { this.fakeIsApplying = false })
+    }
+  }
+
+  async stopFakeScan(): Promise<void> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) {
+      runInAction(() => { this.fakeErrorMessage = 'Device serial not found' })
+      return
+    }
+    runInAction(() => { this.fakeIsApplying = true; this.fakeErrorMessage = null; this.fakeStatusMessage = null })
+    try {
+      const url = `/manager-api/fake-scan/${encodeURIComponent(device.serial)}`
+      const response = await managerApiFetch(url, { method: 'DELETE' })
+      const data = await response.json().catch(() => null)
+      if (!response.ok || !data?.ok) throw new Error(data?.error || `HTTP ${response.status}`)
+      runInAction(() => { this.fakingActive = false; this.fakeStatusMessage = 'Fake scan stopped (real scan restored)' })
+    } catch (error) {
+      runInAction(() => { this.fakeErrorMessage = error instanceof Error ? error.message : 'Failed to stop fake scan' })
+    } finally {
+      runInAction(() => { this.fakeIsApplying = false })
+    }
+  }
+
+  get fakeStatusText(): string | null {
+    if (this.fakeErrorMessage) return this.fakeErrorMessage
+    if (this.fakeStatusMessage) return this.fakeStatusMessage
+    return this.fakingActive ? 'Faking scan results' : null
+  }
+
+  private persistFakeNetworks(): void {
+    this.writeStorage(STORAGE_KEYS.fakeNetworks, JSON.stringify(this.fakeNetworks))
   }
 
   private readStorage(key: string, fallback = ''): string {

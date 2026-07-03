@@ -8,6 +8,15 @@ import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import topBarStyles from './device-top-bar.module.css'
 import styles from './pose-button.module.css'
 
+import type { CSSProperties } from 'react'
+import type { FakeSecurity } from '@/store/device-network-store'
+
+const FAKE_ACTIVE: CSSProperties = {
+  background: 'var(--vkui--color_background_positive_tint)',
+  color: 'var(--vkui--color_text_positive)',
+}
+const FAKE_ROW: CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', marginTop: 8 }
+
 const NETWORK_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'gprs', label: 'GPRS' },
   { value: 'edge', label: 'EDGE' },
@@ -43,6 +52,11 @@ export const NetworkButton = observer(() => {
       document.removeEventListener('mousedown', handleClick)
     }
   }, [isOpen])
+
+  // Sync fake-scan on/off state when the popover opens.
+  useEffect(() => {
+    if (isOpen) void networkStore.fetchFakeScanState()
+  }, [isOpen, networkStore])
 
   return (
     <div className={styles.wrapper} ref={ref}>
@@ -131,6 +145,90 @@ export const NetworkButton = observer(() => {
           {networkStore.statusText && (
             <div className={networkStore.errorMessage ? styles.error : styles.status}>
               {networkStore.statusText}
+            </div>
+          )}
+
+          {/* ============== Fake Wi-Fi networks section ============== */}
+
+          <hr className={styles.divider} />
+
+          <div
+            className={styles.sectionTitle}
+            style={networkStore.fakingActive ? { color: 'var(--vkui--color_text_positive)' } : undefined}
+          >
+            Fake Wi-Fi networks{networkStore.fakingActive ? ' · faking' : ''}
+          </div>
+
+          {networkStore.fakeNetworks.map((n, i) => (
+            <div key={i} style={FAKE_ROW}>
+              <input
+                className={styles.input}
+                placeholder='SSID'
+                style={{ flex: 2, minWidth: 0 }}
+                type='text'
+                value={n.ssid}
+                onChange={(e) => networkStore.updateFakeNetwork(i, { ssid: e.target.value })}
+              />
+              <select
+                className={styles.input}
+                style={{ flex: 1, minWidth: 0 }}
+                value={n.security}
+                onChange={(e) => networkStore.updateFakeNetwork(i, { security: e.target.value as FakeSecurity })}
+              >
+                <option value='open'>Open</option>
+                <option value='wpa2'>WPA2</option>
+                <option value='wpa3'>WPA3</option>
+              </select>
+              <input
+                className={styles.input}
+                placeholder='dBm'
+                style={{ width: 68, flex: '0 0 auto' }}
+                type='number'
+                value={n.signalDbm}
+                onChange={(e) => networkStore.updateFakeNetwork(i, { signalDbm: e.target.value })}
+              />
+              <button
+                className={styles.stopButton}
+                style={{ flex: '0 0 auto', minWidth: 0, padding: '10px 12px' }}
+                title='Remove'
+                type='button'
+                onClick={() => networkStore.removeFakeNetwork(i)}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+
+          <div className={styles.actions}>
+            <button
+              className={styles.presetButton}
+              type='button'
+              onClick={() => networkStore.addFakeNetwork()}
+            >
+              Add network
+            </button>
+            <button
+              className={styles.applyButton}
+              disabled={!networkStore.isFakeValid || networkStore.fakeIsApplying}
+              style={networkStore.fakingActive ? FAKE_ACTIVE : undefined}
+              type='button'
+              onClick={() => { void networkStore.applyFakeScan() }}
+            >
+              {networkStore.fakeIsApplying ? 'Applying...' : 'Apply'}
+            </button>
+            <button
+              className={styles.stopButton}
+              disabled={networkStore.fakeIsApplying}
+              type='button'
+              onClick={() => { void networkStore.stopFakeScan() }}
+            >
+              Stop
+            </button>
+          </div>
+
+          {networkStore.fakeStatusText && (
+            <div className={networkStore.fakeErrorMessage ? styles.error : styles.status}>
+              {networkStore.fakeStatusText}
             </div>
           )}
         </div>
