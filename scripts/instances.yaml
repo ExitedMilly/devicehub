@@ -37,6 +37,15 @@ defaults:
 #     ...
 #     phone_number: "79001234567"
 
+# Optional per-instance BT signal strength (RSSI in dBm) via netsim, applied at
+# launch (needs the op-v2 / 36.6 image). Value is an i8 (-128..127). A bare
+# number defaults to the BLE PhyKind; prefix with ble:/bt_classic: to be explicit.
+# Combines with wifi_ssid into a single -netsim-args value. Example:
+#   - name: bt1
+#     ...
+#     emulator_image: orchid-emulator:op-v2
+#     bt_rssi: "-65"          # => --rssi ble:-65   (or "bt_classic:-70")
+
 instances:
   - name: test1
     # name → container names: emulator-{name}, audio-capture-mgr-{name}
@@ -84,3 +93,5 @@ instances:
     wifi_ssid: OrchidNet
     wifi_password: "orchidpass"
     phone_number: "79001234567"
+    # BT RSSI via netsim (launch arg). Combines with wifi into one -netsim-args.
+    bt_rssi: "-65"

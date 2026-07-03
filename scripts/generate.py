@@ -76,6 +76,10 @@ class Instance:
     # Empty = stock open network (AndroidWifi). Password (8+ chars) => WPA2/CCMP.
     wifi_ssid: Optional[str] = None
     wifi_password: Optional[str] = None
+    # Optional per-instance BT signal strength (RSSI dBm) via netsim, set at
+    # launch. "<dbm>" defaults to the BLE PhyKind (e.g. "-65" => "ble:-65"), or
+    # give an explicit PhyKind "ble:-65" / "bt_classic:-70". Needs the op-v2 image.
+    bt_rssi: Optional[str] = None
     # Optional per-instance phone number (digits only). Applied via the emulator
     # console after boot; empty leaves the emulator default.
     phone_number: Optional[str] = None
@@ -249,6 +253,21 @@ def validate(config: Config) -> list:
                 errors.append(
                     f"{inst.name}: {port_field} ({port}) is privileged "
                     f"(<1024); use port >= 1024 for non-root"
+                )
+
+        # 8.6. bt_rssi format: [PhyKind:]RSSI where RSSI is an i8 (-128..127).
+        if inst.bt_rssi is not None and str(inst.bt_rssi).strip() != '':
+            raw = str(inst.bt_rssi).strip()
+            m = re.match(r'^(?:(ble|bt_classic):)?(-?\d+)$', raw, re.IGNORECASE)
+            if not m:
+                errors.append(
+                    f"{inst.name}: bt_rssi '{inst.bt_rssi}' must be '<dbm>' or "
+                    f"'<ble|bt_classic>:<dbm>' (e.g. '-65' or 'ble:-65')"
+                )
+            elif not (-128 <= int(m.group(2)) <= 127):
+                errors.append(
+                    f"{inst.name}: bt_rssi value ({m.group(2)}) "
+                    f"must be between -128 and 127 (i8)"
                 )
 
     return errors

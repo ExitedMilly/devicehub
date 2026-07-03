@@ -34,9 +34,14 @@ chmod 666 "$TOKEN_FILE"
 docker network create --ipv6 --subnet fd00:1::/64 --subnet 172.31.255.0/24 ipv6side 2>/dev/null || true
 
 {% set emu_image = instance.emulator_image or defaults.emulator_image %}
-{# Single-quote EMULATOR_ADDITIONAL_ARGS only when netsim Wi-Fi is set (its value
-   needs inner double quotes); otherwise keep the plain double-quoted form. #}
-{% set eaa_q = "'" if instance.wifi_ssid else '"' %}
+{# netsim carries the Wi-Fi AP and/or the BT RSSI. When either is set, its
+   -netsim-args value needs inner double quotes, so single-quote the whole
+   EMULATOR_ADDITIONAL_ARGS (survives the shlex parse); otherwise keep the plain
+   double-quoted form. bt_rssi with no PhyKind prefix defaults to BLE. #}
+{% set netsim_needed = instance.wifi_ssid or instance.bt_rssi %}
+{% set eaa_q = "'" if netsim_needed else '"' %}
+{% set bt_rssi_raw = (instance.bt_rssi | string) if instance.bt_rssi else '' %}
+{% set bt_rssi_norm = bt_rssi_raw if ':' in bt_rssi_raw else ('ble:' ~ bt_rssi_raw) %}
 {% if emu_image == 'orchid-emulator:op' %}
 # Build the operator-identity emulator image if missing (idempotent). Behaves
 # like stock budtmo unless OP_* env is set on the emulator run below.
@@ -121,7 +126,7 @@ docker run -d \
     -e PULSE_SINK="{{ instance.pulse_sink }}" \
     -e PULSE_SOURCE="{{ instance.pulse_source }}" \
     -e QEMU_AUDIO_DRV=pa \
-    -e EMULATOR_ADDITIONAL_ARGS={{ eaa_q }}-allow-host-audio -grpc 8554 -camera-front webcam0{% if instance.wifi_ssid %} -netsim-args "--wifi {{ instance.wifi_ssid }}{% if instance.wifi_password %} {{ instance.wifi_password }}{% endif %}"{% endif %}{{ eaa_q }}{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %}{% if instance.phone_number %} -e PHONE_NUMBER="{{ instance.phone_number }}"{% endif %} \
+    -e EMULATOR_ADDITIONAL_ARGS={{ eaa_q }}-allow-host-audio -grpc 8554 -camera-front webcam0{% if netsim_needed %} -netsim-args "{% if instance.wifi_ssid %}--wifi {{ instance.wifi_ssid }}{% if instance.wifi_password %} {{ instance.wifi_password }}{% endif %}{% endif %}{% if instance.wifi_ssid and instance.bt_rssi %} {% endif %}{% if instance.bt_rssi %}--rssi {{ bt_rssi_norm }}{% endif %}"{% endif %}{{ eaa_q }}{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %}{% if instance.phone_number %} -e PHONE_NUMBER="{{ instance.phone_number }}"{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "${TOKEN_FILE}:/home/androidusr/.emulator_console_auth_token" \
     -p "{{ instance.vnc_port }}:6080" \
