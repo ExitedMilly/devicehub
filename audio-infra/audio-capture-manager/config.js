@@ -55,6 +55,12 @@ const EMULATOR_GRPC_HOST = process.env.EMULATOR_GRPC_HOST || null;
 const PULSE_SINK_NAME = process.env.PULSE_SINK_NAME || null;
 const PULSE_SOURCE_NAME = process.env.PULSE_SOURCE_NAME || null;
 
+// Optional: custom Wi-Fi AP the emulator broadcasts via netsim (op-v2 image).
+// When WIFI_SSID is set, the manager auto-connects the device to it after boot.
+// Empty => stock open AndroidWifi (no auto-connect).
+const WIFI_SSID = process.env.WIFI_SSID || null;
+const WIFI_PASSWORD = process.env.WIFI_PASSWORD || null;
+
 // Auth config (P0.6)
 const STF_SECRET = process.env.STF_SECRET || null;
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === '1';
@@ -80,6 +86,7 @@ module.exports = {
     INSTANCE_SERIAL, SINGLE_MODE,
     EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
     PULSE_SINK_NAME, PULSE_SOURCE_NAME,
+    WIFI_SSID, WIFI_PASSWORD,
     STF_SECRET, AUTH_REQUIRED,
     DEVICEHUB_API_HOST, DEVICEHUB_API_PORT,
     OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS,

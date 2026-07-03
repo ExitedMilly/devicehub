@@ -3,6 +3,7 @@
 const log = require('./log').getLogger('index');
 const walkSimulator = require('./domain/walk-simulator');
 const poseScenario = require('./domain/pose-scenario');
+const wifiAutoconnect = require('./domain/wifi-autoconnect');
 const backupLogical = require('./domain/backup-logical');
 
 const config = require('./config');
@@ -11,7 +12,7 @@ const {
     MIC_STATE_POLL_MS, CAMERA_V4L2_DEVICE,
     GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
     SINGLE_MODE, INSTANCE_SERIAL, EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
-    AUTH_REQUIRED, STF_SECRET,
+    AUTH_REQUIRED, STF_SECRET, WIFI_SSID, WIFI_PASSWORD,
 } = config;
 
 if (AUTH_REQUIRED && !STF_SECRET) {
@@ -112,6 +113,10 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
         const instance = new CaptureInstance(INSTANCE_SERIAL, info.sinkIndex);
         instances.set(INSTANCE_SERIAL, instance);
         instance.start();
+
+        // If a custom Wi-Fi SSID is configured, auto-connect the device to it
+        // after boot (background retry loop). No-op when WIFI_SSID is empty.
+        wifiAutoconnect.start(INSTANCE_SERIAL, WIFI_SSID, WIFI_PASSWORD);
     }
 });
 
