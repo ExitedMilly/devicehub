@@ -23,12 +23,15 @@ export interface FakeNetwork {
   ssid: string
   security: FakeSecurity
   signalDbm: string
+  bssid: string
+  bssidAuto: boolean
 }
 
 const FAKE_SECURITIES: FakeSecurity[] = ['open', 'wpa2', 'wpa3']
+const MAC_RE = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/
 
 function defaultFakeNetwork(): FakeNetwork {
-  return { ssid: '', security: 'wpa2', signalDbm: '-50' }
+  return { ssid: '', security: 'wpa2', signalDbm: '-50', bssid: '', bssidAuto: true }
 }
 
 @injectable()
@@ -77,6 +80,8 @@ export class DeviceNetworkStore {
             ssid: String(n?.ssid ?? ''),
             security: FAKE_SECURITIES.includes(n?.security) ? n.security : 'wpa2',
             signalDbm: String(n?.signalDbm ?? '-50'),
+            bssid: String(n?.bssid ?? ''),
+            bssidAuto: n?.bssidAuto !== false,
           }))
         }
       } catch {
@@ -200,8 +205,9 @@ export class DeviceNetworkStore {
     return this.fakeNetworks.every((n) => {
       const ssid = n.ssid.trim()
       const dbm = Number(n.signalDbm)
+      const bssidOk = n.bssidAuto || MAC_RE.test(n.bssid.trim())
       return ssid.length > 0 && ssid.length <= 32 && !/\s/.test(ssid) &&
-        Number.isInteger(dbm) && dbm >= -100 && dbm <= -30
+        Number.isInteger(dbm) && dbm >= -100 && dbm <= -30 && bssidOk
     })
   }
 
@@ -237,7 +243,12 @@ export class DeviceNetworkStore {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          networks: this.fakeNetworks.map((n) => ({ ssid: n.ssid.trim(), security: n.security, signalDbm: Number(n.signalDbm) })),
+          networks: this.fakeNetworks.map((n) => {
+            const net: { ssid: string; security: FakeSecurity; signalDbm: number; bssid?: string } =
+              { ssid: n.ssid.trim(), security: n.security, signalDbm: Number(n.signalDbm) }
+            if (!n.bssidAuto && n.bssid.trim()) net.bssid = n.bssid.trim()
+            return net
+          }),
         }),
       })
       const data = await response.json().catch(() => null)

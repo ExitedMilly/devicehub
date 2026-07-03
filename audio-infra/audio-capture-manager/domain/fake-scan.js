@@ -20,6 +20,7 @@ const CAPABILITIES = {
     wpa3: '[RSN-SAE+FT/SAE-CCMP][ESS]',
 };
 const DEFAULT_FREQ = 2412;
+const MAC_RE = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/;
 
 // serial -> { faking, networks } (last applied fake-scan state).
 const fakeScanStates = new Map();
@@ -50,7 +51,17 @@ function validateNetwork(net, index) {
     }
     let freq = Number(net && net.freq);
     if (!Number.isInteger(freq) || freq < 2400 || freq > 6000) freq = DEFAULT_FREQ;
-    return { ssid, security, signalDbm: dbm, freq, bssid: bssidFor(index) };
+    // BSSID: use the user's if a valid MAC is given, otherwise auto-generate.
+    let bssid = String(net && net.bssid != null ? net.bssid : '').trim();
+    if (bssid) {
+        if (!MAC_RE.test(bssid)) {
+            throw new Error('network[' + index + ']: bssid must be a MAC address like 02:00:00:00:00:01');
+        }
+        bssid = bssid.toLowerCase();
+    } else {
+        bssid = bssidFor(index);
+    }
+    return { ssid, security, signalDbm: dbm, freq, bssid };
 }
 
 // Run a `su 0 cmd wifi ...` command via adb (single argv; no local shell).

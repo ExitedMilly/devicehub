@@ -15,7 +15,18 @@ const FAKE_ACTIVE: CSSProperties = {
   background: 'var(--vkui--color_background_positive_tint)',
   color: 'var(--vkui--color_text_positive)',
 }
-const FAKE_ROW: CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', marginTop: 8 }
+const FAKE_ROW: CSSProperties = { display: 'flex', gap: 6, alignItems: 'center' }
+const FAKE_SUBROW: CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }
+const FAKE_MAC_LABEL: CSSProperties = {
+  display: 'flex',
+  gap: 4,
+  alignItems: 'center',
+  flex: '0 0 auto',
+  fontSize: 12,
+  color: 'var(--vkui--color_text_secondary)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
 
 const NETWORK_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'gprs', label: 'GPRS' },
@@ -160,42 +171,68 @@ export const NetworkButton = observer(() => {
           </div>
 
           {networkStore.fakeNetworks.map((n, i) => (
-            <div key={i} style={FAKE_ROW}>
-              <input
-                className={styles.input}
-                placeholder='SSID'
-                style={{ flex: 2, minWidth: 0 }}
-                type='text'
-                value={n.ssid}
-                onChange={(e) => networkStore.updateFakeNetwork(i, { ssid: e.target.value })}
-              />
-              <select
-                className={styles.input}
-                style={{ flex: 1, minWidth: 0 }}
-                value={n.security}
-                onChange={(e) => networkStore.updateFakeNetwork(i, { security: e.target.value as FakeSecurity })}
-              >
-                <option value='open'>Open</option>
-                <option value='wpa2'>WPA2</option>
-                <option value='wpa3'>WPA3</option>
-              </select>
-              <input
-                className={styles.input}
-                placeholder='dBm'
-                style={{ width: 68, flex: '0 0 auto' }}
-                type='number'
-                value={n.signalDbm}
-                onChange={(e) => networkStore.updateFakeNetwork(i, { signalDbm: e.target.value })}
-              />
-              <button
-                className={styles.stopButton}
-                style={{ flex: '0 0 auto', minWidth: 0, padding: '10px 12px' }}
-                title='Remove'
-                type='button'
-                onClick={() => networkStore.removeFakeNetwork(i)}
-              >
-                ×
-              </button>
+            <div
+              key={i}
+              style={i > 0
+                ? { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--vkui--color_separator_primary)' }
+                : { marginTop: 8 }}
+            >
+              <div style={FAKE_ROW}>
+                <input
+                  className={styles.input}
+                  placeholder='SSID'
+                  style={{ flex: 2, minWidth: 0 }}
+                  type='text'
+                  value={n.ssid}
+                  onChange={(e) => networkStore.updateFakeNetwork(i, { ssid: e.target.value })}
+                />
+                <select
+                  className={styles.input}
+                  style={{ flex: 1, minWidth: 0 }}
+                  value={n.security}
+                  onChange={(e) => networkStore.updateFakeNetwork(i, { security: e.target.value as FakeSecurity })}
+                >
+                  <option value='open'>Open</option>
+                  <option value='wpa2'>WPA2</option>
+                  <option value='wpa3'>WPA3</option>
+                </select>
+                <input
+                  className={styles.input}
+                  placeholder='dBm'
+                  style={{ width: 68, flex: '0 0 auto' }}
+                  type='number'
+                  value={n.signalDbm}
+                  onChange={(e) => networkStore.updateFakeNetwork(i, { signalDbm: e.target.value })}
+                />
+                <button
+                  className={styles.stopButton}
+                  style={{ flex: '0 0 auto', minWidth: 0, padding: '10px 12px' }}
+                  title='Remove'
+                  type='button'
+                  onClick={() => networkStore.removeFakeNetwork(i)}
+                >
+                  ×
+                </button>
+              </div>
+              <div style={FAKE_SUBROW}>
+                <label style={FAKE_MAC_LABEL}>
+                  <input
+                    checked={n.bssidAuto}
+                    type='checkbox'
+                    onChange={(e) => networkStore.updateFakeNetwork(i, { bssidAuto: e.target.checked })}
+                  />
+                  Auto MAC
+                </label>
+                <input
+                  className={styles.input}
+                  disabled={n.bssidAuto}
+                  placeholder={n.bssidAuto ? 'auto-generated' : '02:00:00:00:00:01'}
+                  style={{ flex: 1, minWidth: 0, opacity: n.bssidAuto ? 0.5 : 1 }}
+                  type='text'
+                  value={n.bssidAuto ? '' : n.bssid}
+                  onChange={(e) => networkStore.updateFakeNetwork(i, { bssid: e.target.value })}
+                />
+              </div>
             </div>
           ))}
 
