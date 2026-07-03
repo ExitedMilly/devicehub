@@ -12,6 +12,7 @@ const { handlePose } = require('./routes-pose');
 const { handleLight } = require('./routes-light');
 const { handleBattery } = require('./routes-battery');
 const { handleNetwork } = require('./routes-network');
+const { handleProxy } = require('./routes-proxy');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
 const { handleFileInject } = require('./routes-file-inject');
@@ -29,6 +30,7 @@ const handlers = [
     handleLight,
     handleBattery,
     handleNetwork,
+    handleProxy,
     handleBackup,
     handleVideo,
     handleFileInject,
@@ -40,7 +42,7 @@ const server = http.createServer(async (req, res) => {
 
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') {
