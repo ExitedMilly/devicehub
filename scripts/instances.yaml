@@ -21,6 +21,16 @@ defaults:
 #     op_name_short: MTS     # optional; defaults to op_name
 #     op_roaming: false      # reserved no-op (roaming needs modem_simulator binary patch)
 
+# Optional per-instance Wi-Fi AP via netsim (needs emulator 36.6 -> the
+# orchid-emulator:op-v2 image, which carries the shlex transport fix). Omit for
+# the stock open network (AndroidWifi). Password optional; if set, 8+ chars =>
+# WPA2/CCMP. Example:
+#   - name: wifi1
+#     ...
+#     emulator_image: orchid-emulator:op-v2
+#     wifi_ssid: OrchidNet
+#     wifi_password: "orchidpass"
+
 instances:
   - name: test1
     # name → container names: emulator-{name}, audio-capture-mgr-{name}
@@ -59,3 +69,11 @@ instances:
     vnc_port: 6083
     webrtc_udp_min: 40060
     webrtc_udp_max: 40070
+    op_mcc: "250"
+    op_mnc: "01"
+    op_name: MTS
+    # Re-test slice on the 36.6 image (op-v2) with a custom Wi-Fi AP via netsim.
+    # test1/test2 stay on the production orchid-emulator:op (36.3).
+    emulator_image: orchid-emulator:op-v2
+    wifi_ssid: OrchidNet
+    wifi_password: "orchidpass"

@@ -1,0 +1,21 @@
+# op-v2: same operator-shim as the production Dockerfile, rebased on the
+# verified budtmo 36.6 image (digest-pinned for reproducibility) + the
+# shlex transport fix for budtmo's naive start_cmd.split().
+FROM budtmo/docker-android:emulator_13.0@sha256:ee4c539e76131ff035ecba2ede2eda0b03ad5067905250d675bd32afb709c94f
+USER root
+RUN mv /opt/android/emulator/emulator /opt/android/emulator/emulator.real
+COPY patch-modem-shim.sh /opt/android/emulator/emulator
+RUN chmod 0755 /opt/android/emulator/emulator
+# Source modem_simulator dir is root-owned 644; make it writable so the shim
+# (runs as androidusr) can patch the source too — cheap insurance for the
+# cold-start source->AVD copy. (Path is image-specific: android-33/google_apis/x86_64.)
+RUN chmod -R a+rwX /opt/android/system-images/android-33/google_apis/x86_64/data/misc/modem_simulator
+# Transport fix: budtmo's launcher does subprocess.Popen(start_cmd.split()),
+# whose naive split() breaks composite args like -netsim-args "...". Replace with
+# shlex.split (quote-aware) and ensure `import shlex`. Different file from the
+# op-shim (which wraps the emulator binary), so the two changes don't conflict.
+RUN F=/home/androidusr/docker-android/cli/src/device/emulator.py && \
+    grep -q "^import shlex" "$F" || sed -i "1i import shlex" "$F" && \
+    sed -i 's/subprocess.Popen(start_cmd.split())/subprocess.Popen(shlex.split(start_cmd))/' "$F" && \
+    grep -n "shlex.split(start_cmd)" "$F"
+USER androidusr

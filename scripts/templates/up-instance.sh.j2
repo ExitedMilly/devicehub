@@ -34,11 +34,19 @@ chmod 666 "$TOKEN_FILE"
 docker network create --ipv6 --subnet fd00:1::/64 --subnet 172.31.255.0/24 ipv6side 2>/dev/null || true
 
 {% set emu_image = instance.emulator_image or defaults.emulator_image %}
+{# Single-quote EMULATOR_ADDITIONAL_ARGS only when netsim Wi-Fi is set (its value
+   needs inner double quotes); otherwise keep the plain double-quoted form. #}
+{% set eaa_q = "'" if instance.wifi_ssid else '"' %}
 {% if emu_image == 'orchid-emulator:op' %}
 # Build the operator-identity emulator image if missing (idempotent). Behaves
 # like stock budtmo unless OP_* env is set on the emulator run below.
 docker image inspect orchid-emulator:op >/dev/null 2>&1 || \
     docker build -t orchid-emulator:op "$REPO_ROOT/docker/emulator-operator"
+{% elif emu_image == 'orchid-emulator:op-v2' %}
+# op-v2 = budtmo 36.6 (digest-pinned) + shlex transport fix + op-shim. Needed for
+# netsim Wi-Fi. Build from Dockerfile.v2 if missing (idempotent).
+docker image inspect orchid-emulator:op-v2 >/dev/null 2>&1 || \
+    docker build -f "$REPO_ROOT/docker/emulator-operator/Dockerfile.v2" -t orchid-emulator:op-v2 "$REPO_ROOT/docker/emulator-operator"
 {% endif %}
 # Stop any previous container with the same name
 docker stop "$EMULATOR_NAME" "$CAPTURE_NAME" 2>/dev/null || true
@@ -113,7 +121,7 @@ docker run -d \
     -e PULSE_SINK="{{ instance.pulse_sink }}" \
     -e PULSE_SOURCE="{{ instance.pulse_source }}" \
     -e QEMU_AUDIO_DRV=pa \
-    -e EMULATOR_ADDITIONAL_ARGS="-allow-host-audio -grpc 8554 -camera-front webcam0"{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %} \
+    -e EMULATOR_ADDITIONAL_ARGS={{ eaa_q }}-allow-host-audio -grpc 8554 -camera-front webcam0{% if instance.wifi_ssid %} -netsim-args "--wifi {{ instance.wifi_ssid }}{% if instance.wifi_password %} {{ instance.wifi_password }}{% endif %}"{% endif %}{{ eaa_q }}{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "${TOKEN_FILE}:/home/androidusr/.emulator_console_auth_token" \
     -p "{{ instance.vnc_port }}:6080" \

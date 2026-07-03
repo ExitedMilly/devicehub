@@ -72,6 +72,10 @@ class Instance:
     op_name: str = ''
     op_name_short: str = ''
     op_roaming: bool = False
+    # Optional per-instance Wi-Fi AP via netsim (needs the op-v2 / 36.6 image).
+    # Empty = stock open network (AndroidWifi). Password (8+ chars) => WPA2/CCMP.
+    wifi_ssid: Optional[str] = None
+    wifi_password: Optional[str] = None
     # Optional per-instance emulator image override (defaults to defaults.emulator_image).
     emulator_image: Optional[str] = None
 
