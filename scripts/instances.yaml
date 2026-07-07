@@ -37,6 +37,18 @@ defaults:
 #     ...
 #     phone_number: "79001234567"
 
+# Optional per-instance device identity:
+#   serialno — sets ro.serialno at launch via bootconfig
+#     (-append-userspace-opt androidboot.serialno=...). Chars [A-Za-z0-9._-].
+#     (The emulator's own -android-serialno flag is broken on this 36.6 build —
+#     its validator regex aborts qemu — so we use the bootconfig path.)
+#   wifi_mac — sets wlan0's MAC, applied by the manager's wifi-autoconnect after
+#     boot (ip link + join with -r none). Needs wifi_ssid. Example:
+#   - name: id1
+#     ...
+#     serialno: "MYSERIAL123"
+#     wifi_mac: "02:00:17:00:00:01"
+
 # Optional per-instance BT signal strength (RSSI in dBm) via netsim, applied at
 # launch (needs the op-v2 / 36.6 image). Value is an i8 (-128..127). A bare
 # number defaults to the BLE PhyKind; prefix with ble:/bt_classic: to be explicit.
@@ -127,3 +139,7 @@ instances:
       - name: CoffeeShopBeacon
         manufacturer_data: "4c000215"
         tx_power: medium
+    # Per-instance identity. serialno -> ro.serialno via bootconfig (launch).
+    # wifi_mac -> wlan0 MAC, applied by the manager after boot (needs wifi_ssid).
+    serialno: "ORCHIDTEST3A1"
+    wifi_mac: "02:00:17:03:00:03"

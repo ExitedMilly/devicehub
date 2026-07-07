@@ -85,7 +85,7 @@ docker run -d \
     -e BACKUP_DIR="/backups" \
     -e LOG_PRETTY="${LOG_PRETTY:-1}" \
     -e STF_SECRET="${STF_SECRET:-nosecret}" \
-    -e AUTH_REQUIRED="${AUTH_REQUIRED:-0}"{% if instance.wifi_ssid %} -e WIFI_SSID="{{ instance.wifi_ssid }}"{% if instance.wifi_password %} -e WIFI_PASSWORD="{{ instance.wifi_password }}"{% endif %}{% endif %} \
+    -e AUTH_REQUIRED="${AUTH_REQUIRED:-0}"{% if instance.wifi_ssid %} -e WIFI_SSID="{{ instance.wifi_ssid }}"{% if instance.wifi_password %} -e WIFI_PASSWORD="{{ instance.wifi_password }}"{% endif %}{% if instance.wifi_mac %} -e WIFI_MAC="{{ instance.wifi_mac }}"{% endif %}{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "{{ env.BACKUPS_DIR }}:/backups" \
     -v "${TOKEN_FILE}:/run/console-token:ro" \
@@ -133,7 +133,7 @@ docker run -d \
     -e PULSE_SINK="{{ instance.pulse_sink }}" \
     -e PULSE_SOURCE="{{ instance.pulse_source }}" \
     -e QEMU_AUDIO_DRV=pa \
-    -e EMULATOR_ADDITIONAL_ARGS={{ eaa_q }}-allow-host-audio -grpc 8554 -camera-front webcam0{% if netsim_needed %} -netsim-args "{% if instance.wifi_ssid %}--wifi {{ instance.wifi_ssid }}{% if instance.wifi_password %} {{ instance.wifi_password }}{% endif %}{% endif %}{% if instance.wifi_ssid and instance.bt_rssi %} {% endif %}{% if instance.bt_rssi %}--rssi {{ bt_rssi_norm }}{% endif %}"{% endif %}{{ eaa_q }}{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %}{% if instance.phone_number %} -e PHONE_NUMBER="{{ instance.phone_number }}"{% endif %} \
+    -e EMULATOR_ADDITIONAL_ARGS={{ eaa_q }}-allow-host-audio -grpc 8554 -camera-front webcam0{% if netsim_needed %} -netsim-args "{% if instance.wifi_ssid %}--wifi {{ instance.wifi_ssid }}{% if instance.wifi_password %} {{ instance.wifi_password }}{% endif %}{% endif %}{% if instance.wifi_ssid and instance.bt_rssi %} {% endif %}{% if instance.bt_rssi %}--rssi {{ bt_rssi_norm }}{% endif %}"{% endif %}{% if instance.serialno %} -append-userspace-opt androidboot.serialno={{ instance.serialno }}{% endif %}{{ eaa_q }}{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %}{% if instance.phone_number %} -e PHONE_NUMBER="{{ instance.phone_number }}"{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "${TOKEN_FILE}:/home/androidusr/.emulator_console_auth_token" \{% if instance.ble_beacons %}
     -v "$SCRIPT_DIR/beacons-{{ instance.name }}.ndjson:/tmp/orchid-beacons.ndjson:ro" \{% endif %}

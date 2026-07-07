@@ -12,7 +12,7 @@ const {
     MIC_STATE_POLL_MS, CAMERA_V4L2_DEVICE,
     GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
     SINGLE_MODE, INSTANCE_SERIAL, EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
-    AUTH_REQUIRED, STF_SECRET, WIFI_SSID, WIFI_PASSWORD,
+    AUTH_REQUIRED, STF_SECRET, WIFI_SSID, WIFI_PASSWORD, WIFI_MAC,
 } = config;
 
 if (AUTH_REQUIRED && !STF_SECRET) {
@@ -116,7 +116,7 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
 
         // If a custom Wi-Fi SSID is configured, auto-connect the device to it
         // after boot (background retry loop). No-op when WIFI_SSID is empty.
-        wifiAutoconnect.start(INSTANCE_SERIAL, WIFI_SSID, WIFI_PASSWORD);
+        wifiAutoconnect.start(INSTANCE_SERIAL, WIFI_SSID, WIFI_PASSWORD, WIFI_MAC);
         // NOTE: the default phone number is now baked into the SIM profile by the
         // emulator op-shim (EF_MSISDN), so there is no manager-side auto-apply.
         // The UI runtime path (routes-phonenumber -> setNumber) still works.

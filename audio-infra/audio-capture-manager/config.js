@@ -60,6 +60,10 @@ const PULSE_SOURCE_NAME = process.env.PULSE_SOURCE_NAME || null;
 // Empty => stock open AndroidWifi (no auto-connect).
 const WIFI_SSID = process.env.WIFI_SSID || null;
 const WIFI_PASSWORD = process.env.WIFI_PASSWORD || null;
+// Optional: per-instance Wi-Fi MAC. When set, wifi-autoconnect sets wlan0 to it
+// and joins with MAC randomization off so the custom MAC is used. Empty => the
+// emulator's default (mac80211_hwsim) MAC.
+const WIFI_MAC = process.env.WIFI_MAC || null;
 
 // Optional: emulator phone number (digits only). When set, the manager applies
 // it via the telnet console after boot. Empty => leave the emulator default.
@@ -90,7 +94,7 @@ module.exports = {
     INSTANCE_SERIAL, SINGLE_MODE,
     EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
     PULSE_SINK_NAME, PULSE_SOURCE_NAME,
-    WIFI_SSID, WIFI_PASSWORD, PHONE_NUMBER,
+    WIFI_SSID, WIFI_PASSWORD, WIFI_MAC, PHONE_NUMBER,
     STF_SECRET, AUTH_REQUIRED,
     DEVICEHUB_API_HOST, DEVICEHUB_API_PORT,
     OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS,

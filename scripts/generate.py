@@ -93,6 +93,16 @@ class Instance:
     # (low-power|balanced|low-latency | <ms>), include_device_name (default true),
     # scannable (default true). Empty/omitted => no beacons (no-op).
     ble_beacons: Optional[list] = None
+    # Optional per-instance device serial number (ro.serialno). Set at launch via
+    # bootconfig (-append-userspace-opt androidboot.serialno=...). NOTE: the
+    # emulator's own -android-serialno flag is broken on this build (its validator
+    # regex has an invalid range and aborts qemu), so we use the bootconfig path.
+    # Chars: [A-Za-z0-9._-]. Empty => emulator default (EMULATOR36X6X11X0).
+    serialno: Optional[str] = None
+    # Optional per-instance Wi-Fi MAC (wlan0). Applied at runtime by the manager's
+    # wifi-autoconnect (ip link set wlan0 address ... + join with -r none). Needs
+    # wifi_ssid set (only meaningful for the netsim Wi-Fi). Empty => default MAC.
+    wifi_mac: Optional[str] = None
     # Optional per-instance phone number (digits only). Applied via the emulator
     # console after boot; empty leaves the emulator default.
     phone_number: Optional[str] = None
@@ -399,6 +409,24 @@ def validate(config: Config) -> list:
             else:
                 for bi, beacon in enumerate(inst.ble_beacons):
                     errors.extend(validate_beacon(inst.name, bi, beacon))
+
+        # 8.8. serialno: bootconfig-safe token (no spaces/quotes).
+        if inst.serialno is not None and str(inst.serialno).strip() != '':
+            if not re.match(r'^[A-Za-z0-9._-]+$', str(inst.serialno)):
+                errors.append(
+                    f"{inst.name}: serialno '{inst.serialno}' must match [A-Za-z0-9._-]+"
+                )
+
+        # 8.9. wifi_mac: MAC format; only meaningful with wifi_ssid.
+        if inst.wifi_mac is not None and str(inst.wifi_mac).strip() != '':
+            if not _MAC_RE.match(str(inst.wifi_mac)):
+                errors.append(
+                    f"{inst.name}: wifi_mac '{inst.wifi_mac}' must be a MAC address XX:XX:XX:XX:XX:XX"
+                )
+            elif not inst.wifi_ssid:
+                errors.append(
+                    f"{inst.name}: wifi_mac needs wifi_ssid set (only applies to the netsim Wi-Fi)"
+                )
 
     return errors
 
