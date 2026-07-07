@@ -15,6 +15,7 @@ const { handleNetwork } = require('./routes-network');
 const { handleProxy } = require('./routes-proxy');
 const { handleFakeScan } = require('./routes-fake-scan');
 const { handleBluetooth } = require('./routes-bluetooth');
+const { handleBleBeacon } = require('./routes-ble-beacon');
 const { handlePhonenumber } = require('./routes-phonenumber');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
@@ -36,6 +37,7 @@ const handlers = [
     handleProxy,
     handleFakeScan,
     handleBluetooth,
+    handleBleBeacon,
     handlePhonenumber,
     handleBackup,
     handleVideo,
