@@ -8,8 +8,40 @@
 // `su 0` (root) is needed to write a global setting; args are passed argv-safe
 // (no local shell), same as wifi-autoconnect.
 
+const fs = require('fs');
 const { runAdb } = require('../adb-runner');
 const log = require('../log').getLogger('domain/proxy');
+
+// The address the emulator guest must use to reach a proxy running on the DOCKER
+// HOST (e.g. mitmproxy). The guest's traffic NATs out through the emulator
+// container, so the host is the container's docker-network gateway. The manager
+// runs in that same network, so ITS default gateway is that very address. Read
+// it from /proc/net/route (the row with Destination 00000000; Gateway is a
+// little-endian hex IP). NOTE: 10.0.2.2 does NOT work here — that slirp alias
+// resolves inside the emulator container's netns, not the docker host.
+// For host-side capture the user runs, on the host:
+//   mitmproxy/mitmdump --listen-host 0.0.0.0 --listen-port 8888 --set block_global=false
+// (0.0.0.0 so the container can reach it; block_global=false so mitmproxy accepts
+// the container's non-local source IP).
+function resolveHostAddress() {
+    try {
+        const routes = fs.readFileSync('/proc/net/route', 'utf8');
+        for (const line of routes.split('\n')) {
+            const cols = line.trim().split(/\s+/);
+            // Iface Destination Gateway Flags RefCnt Use Metric Mask ...
+            if (cols.length >= 3 && cols[1] === '00000000' &&
+                /^[0-9A-Fa-f]{8}$/.test(cols[2]) && cols[2] !== '00000000') {
+                const hex = cols[2];
+                const octets = [hex.slice(6, 8), hex.slice(4, 6), hex.slice(2, 4), hex.slice(0, 2)]
+                    .map((h) => parseInt(h, 16));
+                return octets.join('.');
+            }
+        }
+    } catch (err) {
+        log.warn({ err: err.message }, 'resolveHostAddress: failed to read default gateway');
+    }
+    return null;
+}
 
 function validateHost(host) {
     const h = String(host == null ? '' : host).trim();
@@ -61,4 +93,4 @@ async function clearProxy(serial) {
     return getProxy(serial);
 }
 
-module.exports = { getProxy, setProxy, clearProxy, parseProxy };
+module.exports = { getProxy, setProxy, clearProxy, parseProxy, resolveHostAddress };

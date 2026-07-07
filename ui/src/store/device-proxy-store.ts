@@ -25,6 +25,10 @@ export class DeviceProxyStore {
   port = '8080'
   enabled = false
 
+  // Auto-detected address of this instance's docker host (the proxy target for
+  // host-side interception, e.g. mitmproxy). Filled from the backend on open.
+  hostAddress: string | null = null
+
   isApplying = false
   errorMessage: string | null = null
   statusMessage: string | null = null
@@ -60,6 +64,26 @@ export class DeviceProxyStore {
       if (data.host) this.host = String(data.host)
       if (data.port) this.port = String(data.port)
     }
+  }
+
+  // Pull the auto-detected host address (docker-network gateway) for interception.
+  async fetchHostAddress(): Promise<void> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) return
+    try {
+      const url = `/manager-api/proxy/${encodeURIComponent(device.serial)}/host-address`
+      const response = await managerApiFetch(url)
+      const data = await response.json().catch(() => null)
+      if (!response.ok || !data?.ok) return
+      runInAction(() => { this.hostAddress = data.hostAddress || null })
+    } catch {
+      // ignore transient failures
+    }
+  }
+
+  // Fill the host field with the auto-detected host address.
+  useHostAddress(): void {
+    if (this.hostAddress) this.setHost(this.hostAddress)
   }
 
   async fetchStatus(): Promise<void> {

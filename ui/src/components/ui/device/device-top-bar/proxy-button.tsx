@@ -37,9 +37,12 @@ export const ProxyButton = observer(() => {
     }
   }, [isOpen])
 
-  // Sync the current on/off state from the device when the popover opens.
+  // Sync the current on/off state + the auto-detected host address on open.
   useEffect(() => {
-    if (isOpen) void proxyStore.fetchStatus()
+    if (isOpen) {
+      void proxyStore.fetchStatus()
+      void proxyStore.fetchHostAddress()
+    }
   }, [isOpen, proxyStore])
 
   return (
@@ -63,12 +66,25 @@ export const ProxyButton = observer(() => {
             <input
               className={styles.input}
               id='proxy-host'
-              placeholder='10.0.2.2'
+              placeholder={proxyStore.hostAddress || '172.20.0.1'}
               type='text'
               value={proxyStore.host}
               onChange={(event) => proxyStore.setHost(event.target.value)}
             />
           </div>
+
+          {proxyStore.hostAddress && (
+            <div className={styles.status} style={{ marginTop: -4 }}>
+              Host machine (for interception): {proxyStore.hostAddress}{' '}
+              <button
+                type='button'
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--vkui--color_text_link)', cursor: 'pointer', font: 'inherit' }}
+                onClick={() => proxyStore.useHostAddress()}
+              >
+                use
+              </button>
+            </div>
+          )}
 
           <div className={styles.field}>
             <label className={styles.label} htmlFor='proxy-port'>Port</label>

@@ -1,17 +1,20 @@
 'use strict';
 
-const { setProxy, clearProxy, getProxy } = require('../domain/proxy');
+const { setProxy, clearProxy, getProxy, resolveHostAddress } = require('../domain/proxy');
 const log = require('../log').getLogger('http/routes-proxy');
 const { readJsonBody } = require('./helpers');
 const { isSerialAllowed, INSTANCE_SERIAL } = require('../config');
 
 function handleProxy(req, res, url) {
-    const proxyMatch = url.pathname.match(/^\/api\/proxy\/(.+)$/);
-    if (!proxyMatch) {
+    // GET /api/proxy/<serial>/host-address -> auto-detected host proxy address.
+    const hostAddrMatch = url.pathname.match(/^\/api\/proxy\/([^/]+)\/host-address$/);
+    // GET|POST|DELETE /api/proxy/<serial> (serial has no slash).
+    const proxyMatch = url.pathname.match(/^\/api\/proxy\/([^/]+)$/);
+    if (!hostAddrMatch && !proxyMatch) {
         return false;
     }
 
-    const serial = decodeURIComponent(proxyMatch[1]);
+    const serial = decodeURIComponent((hostAddrMatch || proxyMatch)[1]);
     if (!isSerialAllowed(serial)) {
         log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
         res.writeHead(403);
@@ -19,7 +22,13 @@ function handleProxy(req, res, url) {
         return true;
     }
 
-    if (req.method === 'GET') {
+    if (hostAddrMatch && req.method === 'GET') {
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true, hostAddress: resolveHostAddress() }));
+        return true;
+    }
+
+    if (proxyMatch && req.method === 'GET') {
         getProxy(serial)
             .then((state) => {
                 res.writeHead(200);
@@ -33,7 +42,7 @@ function handleProxy(req, res, url) {
         return true;
     }
 
-    if (req.method === 'POST') {
+    if (proxyMatch && req.method === 'POST') {
         readJsonBody(req)
             .then(async (body) => {
                 const state = await setProxy(serial, body.host, body.port);
@@ -48,7 +57,7 @@ function handleProxy(req, res, url) {
         return true;
     }
 
-    if (req.method === 'DELETE') {
+    if (proxyMatch && req.method === 'DELETE') {
         clearProxy(serial)
             .then((state) => {
                 res.writeHead(200);
