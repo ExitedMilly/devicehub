@@ -93,6 +93,9 @@ instances:
     op_mcc: "250"
     op_mnc: "01"
     op_name: MTS
+    # Migrated to 36.6 (op-v3 = op-v2 + socat netsim proxy). op-shim keeps the
+    # MTS operator identity; no wifi/phone/beacons configured here.
+    emulator_image: orchid-emulator:op-v3
 
   - name: test2
     serial: "emulator-test2:5555"
@@ -104,6 +107,8 @@ instances:
     vnc_port: 6082
     webrtc_udp_min: 40040
     webrtc_udp_max: 40050
+    # Migrated to 36.6 (op-v3). Bare instance — no operator/wifi/phone/beacons.
+    emulator_image: orchid-emulator:op-v3
 
   - name: test3
     serial: "emulator-test3:5555"
@@ -118,9 +123,9 @@ instances:
     op_mcc: "250"
     op_mnc: "01"
     op_name: MTS
-    # Re-test slice on the 36.6 image with a custom Wi-Fi AP via netsim.
-    # op-v3 = op-v2 + a socat proxy exposing netsimd's frontend on :7682 for
-    # runtime BLE-beacon add/remove from the UI. test1/test2 stay on op (36.3).
+    # op-v3 = op-v2 (36.6 + op-shim + shlex) + a socat proxy exposing netsimd's
+    # frontend on :7682 for runtime BLE-beacon add/remove from the UI. The whole
+    # fleet (test1/test2/test3) now runs op-v3.
     emulator_image: orchid-emulator:op-v3
     wifi_ssid: OrchidNet
     wifi_password: "orchidpass"
