@@ -52,6 +52,13 @@ docker image inspect orchid-emulator:op >/dev/null 2>&1 || \
 # netsim Wi-Fi. Build from Dockerfile.v2 if missing (idempotent).
 docker image inspect orchid-emulator:op-v2 >/dev/null 2>&1 || \
     docker build -f "$REPO_ROOT/docker/emulator-operator/Dockerfile.v2" -t orchid-emulator:op-v2 "$REPO_ROOT/docker/emulator-operator"
+{% elif emu_image == 'orchid-emulator:op-v3' %}
+# op-v3 = op-v2 + socat proxy exposing netsimd's frontend on :7682 for runtime
+# BLE-beacon add/remove. Build op-v2 first (its base), then op-v3 (idempotent).
+docker image inspect orchid-emulator:op-v2 >/dev/null 2>&1 || \
+    docker build -f "$REPO_ROOT/docker/emulator-operator/Dockerfile.v2" -t orchid-emulator:op-v2 "$REPO_ROOT/docker/emulator-operator"
+docker image inspect orchid-emulator:op-v3 >/dev/null 2>&1 || \
+    docker build -f "$REPO_ROOT/docker/emulator-operator/Dockerfile.v3" -t orchid-emulator:op-v3 "$REPO_ROOT/docker/emulator-operator"
 {% endif %}
 # Stop any previous container with the same name
 docker stop "$EMULATOR_NAME" "$CAPTURE_NAME" 2>/dev/null || true

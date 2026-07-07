@@ -106,9 +106,10 @@ instances:
     op_mcc: "250"
     op_mnc: "01"
     op_name: MTS
-    # Re-test slice on the 36.6 image (op-v2) with a custom Wi-Fi AP via netsim.
-    # test1/test2 stay on the production orchid-emulator:op (36.3).
-    emulator_image: orchid-emulator:op-v2
+    # Re-test slice on the 36.6 image with a custom Wi-Fi AP via netsim.
+    # op-v3 = op-v2 + a socat proxy exposing netsimd's frontend on :7682 for
+    # runtime BLE-beacon add/remove from the UI. test1/test2 stay on op (36.3).
+    emulator_image: orchid-emulator:op-v3
     wifi_ssid: OrchidNet
     wifi_password: "orchidpass"
     phone_number: "79001234567"

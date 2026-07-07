@@ -1,19 +1,31 @@
 'use strict';
 
-// Read-only view of the fake BLE beacons currently in the instance's netsim.
-// netsim's frontend HTTP API (GET /v1/devices) listens on 127.0.0.1 INSIDE the
-// emulator container, which the manager (a separate container) cannot reach
-// directly. But netsim's Wi-Fi slirp maps the guest's 10.0.2.2 to the container
-// loopback, so we read the API from inside the Android guest over adb, using
-// toybox `nc` as a tiny HTTP client. This requires the guest to be connected to
-// the netsim Wi-Fi AP (10.0.2.x); if it is not, netsim's frontend is unreachable
-// and we surface that clearly. Read-only: no create/delete.
+// Runtime management of the fake BLE beacons in the instance's netsim: list /
+// add / remove. netsim's frontend REST API binds 127.0.0.1:7681 INSIDE the
+// emulator container; the op-v3 image runs a socat proxy that re-exposes it on
+// 0.0.0.0:7682, reachable in the docker network as emulator-<instance>:7682. So
+// the manager talks HTTP straight to that proxy (unlike the localhost-only 7681,
+// this needs no adb/guest Wi-Fi). Requires the op-v3 emulator image.
+//
+// netsim API (verified on netsimd 0.3.105):
+//   GET    /v1/devices                 -> { devices: [ { name, chips:[{kind,id,bleBeacon}] } ] }
+//   POST   /v1/devices  {device:...}   -> create (duplicate MAC => 404)
+//   DELETE /v1/devices  {id: <chipId>} -> delete the chip (its device goes too)
+// Delete is by CHIP id, so we GET first to resolve name -> chips[].id.
 
-const { runAdb } = require('../adb-runner');
+const http = require('http');
 const log = require('../log').getLogger('domain/ble-beacon');
 
-const NETSIM_HOST = '10.0.2.2';   // netsim Wi-Fi slirp alias -> container loopback
-const NETSIM_PORT = 7681;         // netsimd web.port (stable default)
+const NETSIM_PROXY_PORT = 7682;
+
+const TX_POWER_LEVELS = { 'ultra-low': 'ULTRA_LOW', low: 'LOW', medium: 'MEDIUM', high: 'HIGH' };
+const ADVERTISE_MODES = { 'low-power': 'LOW_POWER', balanced: 'BALANCED', 'low-latency': 'LOW_LATENCY' };
+const MAC_RE = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/;
+
+// The emulator container host is the part of the serial before ":port".
+function emulatorHost(serial) {
+    return String(serial || '').split(':')[0];
+}
 
 function b64ToHex(b64) {
     try {
@@ -23,14 +35,108 @@ function b64ToHex(b64) {
     }
 }
 
-// Extract the JSON body from a raw HTTP/1.1 response (headers + body).
-function parseHttpJson(raw) {
-    const text = String(raw || '');
-    const start = text.indexOf('{');
-    if (start < 0) {
-        throw new Error('netsim frontend unreachable — is the device connected to the netsim Wi-Fi?');
+function hexToB64(hex, field) {
+    const h = String(hex).trim();
+    if (h.length % 2 !== 0 || !/^[0-9A-Fa-f]*$/.test(h)) {
+        throw new Error(field + ' must be an even-length hex string');
     }
-    return JSON.parse(text.slice(start));
+    return Buffer.from(h, 'hex').toString('base64');
+}
+
+// Build a netsim CreateDeviceRequest (root "device") from a beacon spec, mapping
+// friendly fields to the proto-JSON shape (hex->base64, enum names, MAC ->
+// bleBeacon.address). Mirrors scripts/generate.py:beacon_to_payload.
+function buildBeaconPayload(spec) {
+    const name = String(spec && spec.name != null ? spec.name : '').trim();
+    if (!name) {
+        throw new Error('name is required');
+    }
+
+    const settings = { scannable: spec.scannable !== false, timeout: 0 };
+
+    if (spec.interval != null && String(spec.interval) !== '') {
+        const key = String(spec.interval).trim().toLowerCase();
+        if (ADVERTISE_MODES[key]) {
+            settings.advertiseMode = ADVERTISE_MODES[key];
+        } else {
+            const ms = Number(spec.interval);
+            if (!Number.isInteger(ms) || ms <= 0) {
+                throw new Error('interval must be low-power|balanced|low-latency or a positive integer (ms)');
+            }
+            settings.milliseconds = ms;
+        }
+    } else {
+        settings.advertiseMode = 'LOW_LATENCY';
+    }
+
+    if (spec.tx_power != null && String(spec.tx_power) !== '') {
+        const key = String(spec.tx_power).trim().toLowerCase();
+        if (TX_POWER_LEVELS[key]) {
+            settings.txPowerLevel = TX_POWER_LEVELS[key];
+        } else {
+            const dbm = Number(spec.tx_power);
+            if (!Number.isInteger(dbm) || dbm < -127 || dbm > 127) {
+                throw new Error('tx_power must be ultra-low|low|medium|high or an integer dBm between -127 and 127');
+            }
+            settings.dbm = dbm;
+        }
+    }
+
+    const advData = { includeDeviceName: spec.include_device_name !== false };
+    if (spec.manufacturer_data) {
+        advData.manufacturerData = hexToB64(spec.manufacturer_data, 'manufacturer_data');
+    }
+    if (spec.service_uuid) {
+        const service = { uuid: String(spec.service_uuid) };
+        if (spec.service_data) {
+            service.data = hexToB64(spec.service_data, 'service_data');
+        }
+        advData.services = [service];
+    } else if (spec.service_data) {
+        throw new Error('service_data requires service_uuid');
+    }
+
+    const bleBeacon = { settings, advData };
+    if (spec.mac) {
+        const mac = String(spec.mac).trim();
+        if (!MAC_RE.test(mac)) {
+            throw new Error('mac must be a MAC address like 02:00:00:00:00:01');
+        }
+        bleBeacon.address = mac.toLowerCase();
+    }
+
+    return { device: { name, chips: [{ kind: 'BLUETOOTH_BEACON', bleBeacon }] } };
+}
+
+// One HTTP request to the emulator's netsim proxy. Resolves { status, body }.
+function netsimRequest(host, method, path, body) {
+    return new Promise((resolve, reject) => {
+        const data = body ? JSON.stringify(body) : null;
+        const req = http.request(
+            {
+                host,
+                port: NETSIM_PROXY_PORT,
+                path,
+                method,
+                timeout: 8000,
+                headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
+            },
+            (res) => {
+                let b = '';
+                res.on('data', (c) => { b += c; });
+                res.on('end', () => resolve({ status: res.statusCode, body: b }));
+            }
+        );
+        req.on('error', (err) => {
+            reject(new Error('netsim proxy unreachable at ' + host + ':' + NETSIM_PROXY_PORT + ' (needs the op-v3 image): ' + err.message));
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('netsim proxy timed out at ' + host + ':' + NETSIM_PROXY_PORT));
+        });
+        if (data) req.write(data);
+        req.end();
+    });
 }
 
 function beaconFromChip(deviceName, chip) {
@@ -39,6 +145,7 @@ function beaconFromChip(deviceName, chip) {
     const adv = b.advData || {};
     const services = Array.isArray(adv.services) ? adv.services : [];
     return {
+        id: chip.id != null ? Number(chip.id) : null,   // chip id — used to remove
         name: deviceName || null,
         address: b.address || null,
         scannable: !!settings.scannable,
@@ -52,17 +159,13 @@ function beaconFromChip(deviceName, chip) {
     };
 }
 
-async function listBeacons(serial) {
-    // Ask the guest to GET /v1/devices from netsim via nc (a tiny HTTP client).
-    // Single argv element to adb; the device shell interprets the pipe/printf.
-    const httpReq = "printf 'GET /v1/devices HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n' | toybox nc -w 5 " + NETSIM_HOST + ' ' + NETSIM_PORT;
-    const result = await runAdb(serial, ['shell', httpReq], { timeoutMs: 12000 });
-    const raw = result.stdout || '';
-    if (!raw.trim()) {
-        throw new Error('netsim frontend unreachable — is the device connected to the netsim Wi-Fi?');
+async function fetchBeacons(host) {
+    const res = await netsimRequest(host, 'GET', '/v1/devices');
+    const start = res.body.indexOf('{');
+    if (start < 0) {
+        throw new Error('netsim returned no device list');
     }
-
-    const data = parseHttpJson(raw);
+    const data = JSON.parse(res.body.slice(start));
     const devices = Array.isArray(data.devices) ? data.devices : [];
     const beacons = [];
     for (const device of devices) {
@@ -72,8 +175,49 @@ async function listBeacons(serial) {
             }
         }
     }
+    return beacons;
+}
+
+async function listBeacons(serial) {
+    const beacons = await fetchBeacons(emulatorHost(serial));
     log.info({ serial, count: beacons.length }, 'Listed BLE beacons');
     return beacons;
 }
 
-module.exports = { listBeacons, parseHttpJson };
+async function addBeacon(serial, spec) {
+    const host = emulatorHost(serial);
+    const payload = buildBeaconPayload(spec);
+    log.info({ serial, name: payload.device.name }, 'Adding BLE beacon');
+    const res = await netsimRequest(host, 'POST', '/v1/devices', payload);
+    if (res.status === 404) {
+        throw new Error('could not create beacon (a beacon with this MAC may already exist)');
+    }
+    if (res.status < 200 || res.status >= 300) {
+        throw new Error('netsim rejected the beacon (HTTP ' + res.status + '): ' + res.body.slice(0, 200));
+    }
+    return listBeacons(serial);
+}
+
+async function removeBeacon(serial, identifier) {
+    const host = emulatorHost(serial);
+    let chipId;
+    if (/^\d+$/.test(String(identifier))) {
+        chipId = Number(identifier);
+    } else {
+        // Resolve a device name to its BLE-beacon chip id.
+        const beacons = await fetchBeacons(host);
+        const match = beacons.find((b) => b.name === String(identifier));
+        if (!match || match.id == null) {
+            throw new Error('no beacon found named "' + identifier + '"');
+        }
+        chipId = match.id;
+    }
+    log.info({ serial, chipId }, 'Removing BLE beacon');
+    const res = await netsimRequest(host, 'DELETE', '/v1/devices', { id: chipId });
+    if (res.status < 200 || res.status >= 300) {
+        throw new Error('netsim could not remove beacon chip ' + chipId + ' (HTTP ' + res.status + '): ' + res.body.slice(0, 120));
+    }
+    return listBeacons(serial);
+}
+
+module.exports = { listBeacons, addBeacon, removeBeacon, buildBeaconPayload };

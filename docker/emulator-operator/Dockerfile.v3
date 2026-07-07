@@ -1,0 +1,17 @@
+# op-v3: op-v2 + a socat proxy that exposes netsimd's localhost-only frontend
+# (127.0.0.1:7681) on 0.0.0.0:7682, reachable in the docker network as
+# emulator-<instance>:7682. This lets the capture-manager (a separate container)
+# add/remove BLE beacons at runtime via netsim's REST API. Nothing from op-v2
+# (op-shim / shlex fix / wifi / modem) is touched — this is purely additive, so
+# op-v2 stays a clean rollback target. socat is already in the budtmo base image.
+FROM orchid-emulator:op-v2
+USER root
+# Register socat as a supervised service by appending to budtmo's base process
+# config (the one run.sh actually loads). Append-only: existing programs (device,
+# appium, log_web_shared) are untouched.
+COPY netsim-proxy.conf /tmp/netsim-proxy.conf
+RUN cat /tmp/netsim-proxy.conf >> /home/androidusr/docker-android/mixins/configs/process/supervisord-base.conf && \
+    rm /tmp/netsim-proxy.conf && \
+    grep -q 'program:netsim_proxy' /home/androidusr/docker-android/mixins/configs/process/supervisord-base.conf && \
+    command -v socat
+USER androidusr
