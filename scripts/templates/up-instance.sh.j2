@@ -128,7 +128,8 @@ docker run -d \
     -e QEMU_AUDIO_DRV=pa \
     -e EMULATOR_ADDITIONAL_ARGS={{ eaa_q }}-allow-host-audio -grpc 8554 -camera-front webcam0{% if netsim_needed %} -netsim-args "{% if instance.wifi_ssid %}--wifi {{ instance.wifi_ssid }}{% if instance.wifi_password %} {{ instance.wifi_password }}{% endif %}{% endif %}{% if instance.wifi_ssid and instance.bt_rssi %} {% endif %}{% if instance.bt_rssi %}--rssi {{ bt_rssi_norm }}{% endif %}"{% endif %}{{ eaa_q }}{% if instance.op_mcc %} -e OP_MCC="{{ instance.op_mcc }}" -e OP_MNC="{{ instance.op_mnc }}" -e OP_NAME="{{ instance.op_name }}"{% if instance.op_name_short %} -e OP_NAME_SHORT="{{ instance.op_name_short }}"{% endif %}{% endif %}{% if instance.phone_number %} -e PHONE_NUMBER="{{ instance.phone_number }}"{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
-    -v "${TOKEN_FILE}:/home/androidusr/.emulator_console_auth_token" \
+    -v "${TOKEN_FILE}:/home/androidusr/.emulator_console_auth_token" \{% if instance.ble_beacons %}
+    -v "$SCRIPT_DIR/beacons-{{ instance.name }}.ndjson:/tmp/orchid-beacons.ndjson:ro" \{% endif %}
     -p "{{ instance.vnc_port }}:6080" \
     -p "{{ instance.adb_port }}:5555" \
     --restart unless-stopped \
@@ -148,6 +149,26 @@ for i in $(seq 1 24); do
     sleep 5
 done
 
+{% if instance.ble_beacons %}
+# Inject fake BLE beacons into netsim. Custom beacons CANNOT be expressed in the
+# --config file (its schema is only bluetooth/wifi/capture), so they are created
+# after boot via netsimd's frontend API (POST /v1/devices). That frontend listens
+# on 127.0.0.1 inside the emulator container, so POST from within via bash
+# /dev/tcp — one CreateDeviceRequest JSON per line of the mounted ndjson.
+echo "[{{ instance.name }}] Injecting {{ instance.ble_beacons | length }} BLE beacon(s) into netsim..."
+docker exec "$EMULATOR_NAME" bash -c '
+  P=$(grep -oE "web.port=[0-9]+" /tmp/netsim.ini 2>/dev/null | cut -d= -f2); P=${P:-7681}
+  for i in $(seq 1 30); do (exec 3<>/dev/tcp/127.0.0.1/$P) 2>/dev/null && { exec 3>&-; break; }; sleep 1; done
+  post(){ local b="$1" len; len=$(printf %s "$b" | wc -c); exec 3<>/dev/tcp/127.0.0.1/$P || return 1
+    printf "POST /v1/devices HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" "$len" "$b" >&3
+    head -1 <&3; exec 3>&-; }
+  n=0
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    n=$((n+1)); printf "  beacon %d -> " "$n"; post "$line" | tr -d "\r"
+  done < /tmp/orchid-beacons.ndjson
+' || echo "[{{ instance.name }}] WARN: BLE beacon injection failed"
+{% endif %}
 # Connect adbd from devicehub stack so the device appears in UI
 if docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^adbd$'; then
     echo "[{{ instance.name }}] Connecting adbd to $EMULATOR_NAME..."

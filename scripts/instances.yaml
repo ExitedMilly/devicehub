@@ -46,6 +46,25 @@ defaults:
 #     emulator_image: orchid-emulator:op-v2
 #     bt_rssi: "-65"          # => --rssi ble:-65   (or "bt_classic:-70")
 
+# Optional per-instance fake BLE beacons (custom Bluetooth devices the emulator
+# sees in its BLE scan). netsim's --config file cannot define custom beacons, so
+# these are injected after boot via netsimd's frontend API (POST /v1/devices).
+# Needs the op-v2 image. Each item: name (required) plus optional
+# mac / manufacturer_data (hex) / service_uuid / service_data (hex) /
+# tx_power (ultra-low|low|medium|high | <dbm>) / interval
+# (low-power|balanced|low-latency | <ms>) / include_device_name / scannable.
+# Empty or omitted => no beacons (no-op). Example:
+#   - name: beacon1
+#     ...
+#     emulator_image: orchid-emulator:op-v2
+#     ble_beacons:
+#       - name: OrchidBeacon
+#         mac: "be:ac:0b:0c:0d:0e"
+#         manufacturer_data: "00ff01020304"
+#         service_uuid: "0000fe2c-0000-1000-8000-00805f9b34fb"
+#         tx_power: high
+#         interval: low-latency
+
 instances:
   - name: test1
     # name → container names: emulator-{name}, audio-capture-mgr-{name}
@@ -95,3 +114,15 @@ instances:
     phone_number: "79001234567"
     # BT RSSI via netsim (launch arg). Combines with wifi into one -netsim-args.
     bt_rssi: "-65"
+    # Fake BLE beacons — injected into netsim after boot (POST /v1/devices).
+    ble_beacons:
+      - name: OrchidBeacon
+        mac: "be:ac:0b:0c:0d:0e"
+        manufacturer_data: "00ff01020304"
+        service_uuid: "0000fe2c-0000-1000-8000-00805f9b34fb"
+        service_data: "aabbcc"
+        tx_power: high
+        interval: low-latency
+      - name: CoffeeShopBeacon
+        manufacturer_data: "4c000215"
+        tx_power: medium

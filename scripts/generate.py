@@ -13,6 +13,9 @@ import os
 import argparse
 import subprocess
 import re
+import json
+import base64
+import binascii
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
@@ -80,6 +83,16 @@ class Instance:
     # launch. "<dbm>" defaults to the BLE PhyKind (e.g. "-65" => "ble:-65"), or
     # give an explicit PhyKind "ble:-65" / "bt_classic:-70". Needs the op-v2 image.
     bt_rssi: Optional[str] = None
+    # Optional per-instance fake BLE beacons (custom Bluetooth devices visible in
+    # the emulator's BLE scan). netsim's --config file CANNOT define custom
+    # beacons (its schema is only bluetooth/wifi/capture), so these are injected
+    # after boot via netsimd's frontend API (POST /v1/devices, from inside the
+    # emulator container). Each item: name (required), and optional mac,
+    # manufacturer_data (hex), service_uuid, service_data (hex),
+    # tx_power (ultra-low|low|medium|high | <dbm>), interval
+    # (low-power|balanced|low-latency | <ms>), include_device_name (default true),
+    # scannable (default true). Empty/omitted => no beacons (no-op).
+    ble_beacons: Optional[list] = None
     # Optional per-instance phone number (digits only). Applied via the emulator
     # console after boot; empty leaves the emulator default.
     phone_number: Optional[str] = None
@@ -92,6 +105,115 @@ class Config:
     defaults: Defaults
     instances: list
     env: dict
+
+
+# ============================================================
+# BLE beacons (netsim frontend CreateDevice payloads)
+# ============================================================
+
+# netsim.model.Chip.BleBeacon.AdvertiseSettings enums.
+_TX_POWER_LEVELS = {
+    'ultra-low': 'ULTRA_LOW', 'low': 'LOW', 'medium': 'MEDIUM', 'high': 'HIGH',
+}
+_ADVERTISE_MODES = {
+    'low-power': 'LOW_POWER', 'balanced': 'BALANCED', 'low-latency': 'LOW_LATENCY',
+}
+_MAC_RE = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
+
+
+def _hex_to_b64(value: str) -> str:
+    """Hex string (e.g. '00ff01') -> base64 (proto3-JSON encoding for bytes)."""
+    return base64.b64encode(binascii.unhexlify(value)).decode('ascii')
+
+
+def beacon_to_payload(beacon: dict) -> str:
+    """Build a netsim frontend CreateDeviceRequest JSON (root 'device') for one
+    BLE beacon. Assumes the beacon dict already passed validate_beacon()."""
+    settings = {'scannable': bool(beacon.get('scannable', True)), 'timeout': 0}
+
+    interval = beacon.get('interval')
+    if interval is not None:
+        key = str(interval).strip().lower()
+        if key in _ADVERTISE_MODES:
+            settings['advertiseMode'] = _ADVERTISE_MODES[key]
+        else:
+            settings['milliseconds'] = int(interval)
+    else:
+        settings['advertiseMode'] = 'LOW_LATENCY'
+
+    tx_power = beacon.get('tx_power')
+    if tx_power is not None:
+        key = str(tx_power).strip().lower()
+        if key in _TX_POWER_LEVELS:
+            settings['txPowerLevel'] = _TX_POWER_LEVELS[key]
+        else:
+            settings['dbm'] = int(tx_power)
+
+    adv_data = {'includeDeviceName': bool(beacon.get('include_device_name', True))}
+    if beacon.get('manufacturer_data'):
+        adv_data['manufacturerData'] = _hex_to_b64(str(beacon['manufacturer_data']))
+    if beacon.get('service_uuid'):
+        service = {'uuid': str(beacon['service_uuid'])}
+        if beacon.get('service_data'):
+            service['data'] = _hex_to_b64(str(beacon['service_data']))
+        adv_data['services'] = [service]
+
+    ble_beacon = {'settings': settings, 'advData': adv_data}
+    # MAC only honoured at the BleBeaconCreate level (chip.address is ignored).
+    if beacon.get('mac'):
+        ble_beacon['address'] = str(beacon['mac']).lower()
+
+    device = {
+        'name': str(beacon['name']),
+        'chips': [{'kind': 'BLUETOOTH_BEACON', 'bleBeacon': ble_beacon}],
+    }
+    return json.dumps({'device': device}, separators=(',', ':'))
+
+
+def validate_beacon(inst_name: str, index: int, beacon) -> list:
+    """Return list of validation errors for one ble_beacons entry."""
+    errs = []
+    tag = f"{inst_name}: ble_beacons[{index}]"
+    if not isinstance(beacon, dict):
+        return [f"{tag} must be a mapping"]
+    name = beacon.get('name')
+    if not name or not str(name).strip():
+        errs.append(f"{tag}: 'name' is required")
+    mac = beacon.get('mac')
+    if mac is not None and not _MAC_RE.match(str(mac)):
+        errs.append(f"{tag}: mac '{mac}' must be a MAC address XX:XX:XX:XX:XX:XX")
+    for hexfield in ('manufacturer_data', 'service_data'):
+        val = beacon.get(hexfield)
+        if val is not None and str(val) != '':
+            try:
+                binascii.unhexlify(str(val))
+            except (binascii.Error, ValueError):
+                errs.append(f"{tag}: {hexfield} '{val}' must be an even-length hex string")
+    if beacon.get('service_data') and not beacon.get('service_uuid'):
+        errs.append(f"{tag}: service_data requires service_uuid")
+    tx_power = beacon.get('tx_power')
+    if tx_power is not None:
+        key = str(tx_power).strip().lower()
+        if key not in _TX_POWER_LEVELS:
+            try:
+                dbm = int(tx_power)
+                if not (-127 <= dbm <= 127):
+                    errs.append(f"{tag}: tx_power dBm ({dbm}) must be within [-127, 127]")
+            except (TypeError, ValueError):
+                errs.append(f"{tag}: tx_power must be one of "
+                            f"{', '.join(_TX_POWER_LEVELS)} or an integer dBm")
+    interval = beacon.get('interval')
+    if interval is not None:
+        key = str(interval).strip().lower()
+        if key not in _ADVERTISE_MODES:
+            try:
+                ms = int(interval)
+                if ms <= 0:
+                    errs.append(f"{tag}: interval ms ({ms}) must be a positive integer")
+            except (TypeError, ValueError):
+                errs.append(f"{tag}: interval must be one of "
+                            f"{', '.join(_ADVERTISE_MODES)} or an integer (ms)")
+    return errs
 
 
 # ============================================================
@@ -270,6 +392,14 @@ def validate(config: Config) -> list:
                     f"must be between -128 and 127 (i8)"
                 )
 
+        # 8.7. ble_beacons: each entry must be a well-formed beacon spec.
+        if inst.ble_beacons is not None:
+            if not isinstance(inst.ble_beacons, list):
+                errors.append(f"{inst.name}: ble_beacons must be a list")
+            else:
+                for bi, beacon in enumerate(inst.ble_beacons):
+                    errors.extend(validate_beacon(inst.name, bi, beacon))
+
     return errors
 
 
@@ -283,6 +413,9 @@ def get_known_outputs(instances: list) -> list:
     for inst in instances:
         files.append(f'up-{inst.name}.sh')
         files.append(f'down-{inst.name}.sh')
+        # Per-instance BLE beacon payloads (written only when beacons are set,
+        # but always listed so stale files get cleaned when beacons are removed).
+        files.append(f'beacons-{inst.name}.ndjson')
     return files
 
 
@@ -428,6 +561,12 @@ def generate_artifacts(config: Config, scripts_dir: Path) -> None:
         down_path = generated_dir / f'down-{inst.name}.sh'
         down_path.write_text(down_tmpl.render(**ctx))
         down_path.chmod(0o755)
+
+        # Per-instance BLE beacon payloads (one CreateDeviceRequest JSON per line).
+        # Injected into netsimd after boot by up-{name}.sh (POST /v1/devices).
+        if inst.ble_beacons:
+            ndjson = '\n'.join(beacon_to_payload(b) for b in inst.ble_beacons) + '\n'
+            (generated_dir / f'beacons-{inst.name}.ndjson').write_text(ndjson)
 
     # Aggregator scripts
     for tmpl_name, out_name in [
