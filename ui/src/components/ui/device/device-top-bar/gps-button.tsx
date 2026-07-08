@@ -26,6 +26,9 @@ const PROFILE_OPTIONS: Array<{ value: WalkProfile; label: string }> = [
 
 export const GpsButton = observer(() => {
   const gpsStore = useInjection(CONTAINER_IDS.deviceGpsStore)
+  // Shared scenarios store owns the "Weather from location" feature (it reads the
+  // applied GPS location and owns the temperature/humidity/pressure resources).
+  const scenarios = useInjection(CONTAINER_IDS.deviceScenariosStore)
   const [isOpen, setIsOpen] = useState(false)
   const [showWalkSettings, setShowWalkSettings] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -166,6 +169,24 @@ export const GpsButton = observer(() => {
                   </Checkbox>
                 </div>
               ))}
+
+              {/* Real weather (Open-Meteo) → temp/humidity/pressure. Follows the live
+                  location: a fixed point, or the walk position while walking. */}
+              <div className={styles.settingRow}>
+                <Checkbox
+                  checked={scenarios.weatherOn}
+                  onChange={(e) => scenarios.toggleWeather(e.target.checked)}
+                >
+                  Weather from location
+                </Checkbox>
+              </div>
+              {(scenarios.weatherApplying || scenarios.weatherError || scenarios.weatherStatus) && (
+                <div className={scenarios.weatherError ? styles.error : styles.status}>
+                  {scenarios.weatherApplying
+                    ? 'Fetching weather…'
+                    : (scenarios.weatherError ?? scenarios.weatherStatus)}
+                </div>
+              )}
             </div>
           )}
 

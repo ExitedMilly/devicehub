@@ -70,6 +70,10 @@ export class DeviceGpsStore {
   errorMessage: string | null = null
   statusMessage: string | null = null
   lastAppliedAt: number | null = null
+  // Currently-applied mock coordinates (null when none/stopped). Consumed by the
+  // "Weather from location" feature to fetch weather for the active location.
+  appliedLatitude: number | null = null
+  appliedLongitude: number | null = null
 
   // ----- walk simulation state -----
   walkFromLat = ''
@@ -189,6 +193,8 @@ export class DeviceGpsStore {
 
       runInAction(() => {
         this.lastAppliedAt = Date.now()
+        this.appliedLatitude = lat
+        this.appliedLongitude = lon
         this.statusMessage = 'GPS applied, keepalive started'
         // Backend has stopped any active walk; reflect that locally.
         this.walkBackend = null
@@ -238,6 +244,8 @@ export class DeviceGpsStore {
 
       runInAction(() => {
         this.statusMessage = 'GPS keepalive stopped'
+        this.appliedLatitude = null
+        this.appliedLongitude = null
         this.walkBackend = null
         this.stopWalkPolling()
       })
@@ -287,6 +295,18 @@ export class DeviceGpsStore {
     return this.walkBackend?.status === 'running' || this.walkBackend?.status === 'paused'
   }
 
+  // The device's current effective mock location for the "Weather from location"
+  // feature: the LIVE walk position while a walk is running/paused/finished (so
+  // weather follows the route), else the applied point-GPS coordinates, else null.
+  get currentLocation(): { lat: number; lon: number } | null {
+    const wp = this.walkBackend?.currentPoint
+    if (wp) return { lat: wp.lat, lon: wp.lon }
+    if (this.appliedLatitude != null && this.appliedLongitude != null) {
+      return { lat: this.appliedLatitude, lon: this.appliedLongitude }
+    }
+    return null
+  }
+
   async startWalk(): Promise<void> {
     const device = await this.deviceBySerialStore.fetch()
     if (!device?.serial) {
@@ -330,9 +350,13 @@ export class DeviceGpsStore {
       runInAction(() => {
         this.walkBackend = data.status as WalkBackendStatus
         this.walkStatusMessage = 'Walk started'
-        // The backend already cleared any GPS keepalive; reflect that.
+        // The backend already cleared any GPS keepalive; reflect that. Also drop the
+        // applied point-GPS coordinates so "Weather from location" doesn't fetch for
+        // the stale pre-walk point while the device is driven along the route.
         this.statusMessage = null
         this.lastAppliedAt = null
+        this.appliedLatitude = null
+        this.appliedLongitude = null
       })
       this.startWalkPolling()
     } catch (error) {

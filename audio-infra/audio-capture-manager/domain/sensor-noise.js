@@ -55,6 +55,10 @@ const RESOURCE_SENSORS = {
     // temperature operblock (console `sensor set temperature`) — noise yields the
     // ambient temperature sensor so it holds the user-set value instead of ~25°C.
     temperature: ['temperature'],
+    // "Weather from location" additionally owns humidity/pressure (Open-Meteo sets
+    // real values) so noise yields those too instead of jittering the defaults.
+    humidity: ['humidity'],
+    pressure: ['pressure'],
 };
 
 const sessions = new Map(); // serial -> session

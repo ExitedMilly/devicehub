@@ -18,6 +18,7 @@ const { handleBluetooth } = require('./routes-bluetooth');
 const { handleBleBeacon } = require('./routes-ble-beacon');
 const { handleSensorNoise } = require('./routes-sensor-noise');
 const { handleTemperature } = require('./routes-temperature');
+const { handleWeather } = require('./routes-weather');
 const { handlePhonenumber } = require('./routes-phonenumber');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
@@ -42,6 +43,7 @@ const handlers = [
     handleBleBeacon,
     handleSensorNoise,
     handleTemperature,
+    handleWeather,
     handlePhonenumber,
     handleBackup,
     handleVideo,

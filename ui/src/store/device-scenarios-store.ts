@@ -8,6 +8,7 @@ import { DeviceBatteryStore } from '@/store/device-battery-store'
 import { DevicePoseStore } from '@/store/device-pose-store'
 import { DeviceNetworkStore } from '@/store/device-network-store'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
+import { DeviceGpsStore } from '@/store/device-gps-store'
 import { managerApiFetch } from '@/api/manager-api'
 
 // ===========================================================================
@@ -51,6 +52,21 @@ const MAX_TEMPERATURE_C = 45
 // surfaces "Apply failed" instead of a forever-spinning button.
 const TEMPERATURE_APPLY_TIMEOUT_MS = 10000
 
+// "Weather from location": only re-query Open-Meteo after the device has moved more
+// than this many km from the last-queried point (weather varies on a km/hours scale).
+// Trigger is DISTANCE, not time — a jump to another country moves far past the
+// threshold and re-queries at once, where a timer would keep a stale value.
+const WEATHER_DISTANCE_KM = 10
+// Client-side ceiling on a weather request (backend: 8s Open-Meteo + 6s console).
+// Above that we abort so a hung request can't wedge weatherFetching during a walk.
+const WEATHER_APPLY_TIMEOUT_MS = 15000
+// Time trigger (COMPLEMENTS the distance trigger, doesn't replace it): re-query if
+// the last request is older than this even when the device hasn't moved — real
+// weather drifts over hours (day↔night), so a stationary device must still refresh.
+// Distance = instant trigger for movement/relocation; age = trigger for standing still.
+const WEATHER_MAX_AGE_MS = 30 * 60 * 1000     // 30 min
+const WEATHER_CHECK_INTERVAL_MS = 60 * 1000   // how often the age is checked
+
 // "Low battery" preset target (%).
 const LOW_BATTERY_PCT = 15
 
@@ -68,14 +84,16 @@ export type ScenarioPreset = 'onCharge' | 'metro' | 'reset' | 'lowBattery'
 
 // Device resources a scenario can own. Used for anti-collision between ambient
 // scenarios and one-shot presets (preset always wins).
-export type ScenarioResource = 'light' | 'pose' | 'signal' | 'charging' | 'batteryLevel' | 'temperature'
+export type ScenarioResource =
+  | 'light' | 'pose' | 'signal' | 'charging' | 'batteryLevel'
+  | 'temperature' | 'humidity' | 'pressure'
 
 // Resources whose sensors the "Realistic sensors" noise drives, and therefore
 // must yield when an operblock owns them. Kept in sync with the backend's
 // RESOURCE_SENSORS (domain/sensor-noise.js).
-const NOISE_RESOURCES: ScenarioResource[] = ['light', 'pose', 'temperature']
+const NOISE_RESOURCES: ScenarioResource[] = ['light', 'pose', 'temperature', 'humidity', 'pressure']
 
-type AmbientId = 'dayNight' | 'rotation' | 'drain' | 'temperature'
+type AmbientId = 'dayNight' | 'rotation' | 'drain' | 'temperature' | 'weather'
 
 // Stable key for any active resource owner — an ambient scenario or a preset.
 // Lets preemption treat both kinds uniformly (no per-pair logic).
@@ -88,6 +106,10 @@ const AMBIENT_META: Record<AmbientId, { resources: ScenarioResource[] }> = {
   drain: { resources: ['batteryLevel'] },
   // Manual set-and-hold (no timer); owns `temperature` so noise yields it.
   temperature: { resources: ['temperature'] },
+  // "Weather from location": owns temperature + humidity + pressure (real Open-Meteo
+  // values). Shares `temperature` with the manual operblock, so the generic
+  // preemption makes the two mutually exclusive (newest wins) for free.
+  weather: { resources: ['temperature', 'humidity', 'pressure'] },
 }
 
 // Resources each preset writes. `reset` is special-cased (stops ALL ambient).
@@ -106,6 +128,18 @@ function clampInt(value: number, lo: number, hi: number): number {
   const n = Math.round(Number(value))
   if (!Number.isFinite(n)) return lo
   return Math.max(lo, Math.min(hi, n))
+}
+
+// Great-circle distance (km) between two lat/lon points — drives the weather
+// re-query threshold (distance, not time).
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371
+  const toRad = (d: number): number => (d * Math.PI) / 180
+  const dLat = toRad(lat2 - lat1)
+  const dLon = toRad(lon2 - lon1)
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)))
 }
 
 @injectable()
@@ -145,6 +179,22 @@ export class DeviceScenariosStore {
   temperatureStatus: string | null = null
   temperatureError: string | null = null
 
+  // Ambient "Weather from location": when on, fetches real weather (Open-Meteo) for
+  // the applied GPS location and owns temperature/humidity/pressure so noise yields
+  // them. Re-queries only when the device moves > WEATHER_DISTANCE_KM (distance, not
+  // time). Mutually exclusive with the manual temperature operblock via preemption.
+  weatherOn = false
+  weatherApplying = false
+  weatherStatus: string | null = null
+  weatherError: string | null = null
+  // Coordinates of the last successful weather fetch (drives the distance throttle).
+  private lastWeatherLat: number | null = null
+  private lastWeatherLon: number | null = null
+  private lastWeatherTime: number | null = null
+  private weatherFetching = false
+  private weatherPending = false
+  private weatherTimer: number | null = null
+
   // ----- internal (non-observable) timer/loop state -----
   private cycleTimer: number | null = null
   private rotateTimer: number | null = null
@@ -161,7 +211,8 @@ export class DeviceScenariosStore {
     @inject(CONTAINER_IDS.deviceBatteryStore) private battery: DeviceBatteryStore,
     @inject(CONTAINER_IDS.devicePoseStore) private pose: DevicePoseStore,
     @inject(CONTAINER_IDS.deviceNetworkStore) private network: DeviceNetworkStore,
-    @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore
+    @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore,
+    @inject(CONTAINER_IDS.deviceGpsStore) private gpsStore: DeviceGpsStore
   ) {
     makeAutoObservable(this)
 
@@ -171,6 +222,14 @@ export class DeviceScenariosStore {
     reaction(
       () => this.noiseOwnedKey,
       () => { if (this.sensorNoiseOn) void this.pushSensorNoise() }
+    )
+
+    // While "Weather from location" is on, re-fetch weather when the applied GPS
+    // location changes (distance-throttled inside maybeFetchWeather). The key also
+    // covers the initial fetch when the feature is toggled on.
+    reaction(
+      () => this.weatherLocationKey,
+      () => { if (this.weatherOn) void this.maybeFetchWeather() }
     )
   }
 
@@ -309,6 +368,154 @@ export class DeviceScenariosStore {
     }
   }
 
+  // ===================== Ambient: Weather from location =====================
+  // Sets real weather (Open-Meteo) for the applied GPS location; owns temperature/
+  // humidity/pressure so noise yields them. Distance-throttled (not time).
+
+  // Non-empty only while weather is on AND a location exists — so the reaction fires
+  // the initial fetch (on enable) and every location change, INCLUDING the live walk
+  // position (gpsStore.currentLocation follows a running walk). maybeFetchWeather's
+  // 10km throttle keeps the frequent walk updates from spamming Open-Meteo.
+  private get weatherLocationKey(): string {
+    if (!this.weatherOn) return ''
+    const loc = this.gpsStore.currentLocation
+    return loc == null ? '' : `${loc.lat},${loc.lon}`
+  }
+
+  toggleWeather(on: boolean): void {
+    if (on) {
+      // Newest-wins: preempt the manual temperature operblock (shared `temperature`).
+      this.preemptConflicting(AMBIENT_META.weather.resources, 'ambient:weather')
+      runInAction(() => {
+        this.weatherOn = true
+        this.weatherStatus = null
+        this.weatherError = null
+        this.lastWeatherLat = null
+        this.lastWeatherLon = null
+        this.lastWeatherTime = null
+      })
+      // The weatherLocationKey reaction fires the initial fetch; the noiseOwnedKey
+      // reaction pushes ownership (fast) so noise yields the sensors before the
+      // slower Open-Meteo round-trip sets them. The timer covers standing still.
+      this.startWeatherTimer()
+    } else {
+      runInAction(() => {
+        this.weatherOn = false
+        this.weatherStatus = null
+        this.weatherError = null
+        this.lastWeatherLat = null
+        this.lastWeatherLon = null
+        this.lastWeatherTime = null
+        this.weatherPending = false
+      })
+      this.stopWeatherTimer()
+      this.releaseWeather()
+    }
+  }
+
+  // Periodically re-check weather staleness so a STATIONARY device still refreshes
+  // (real weather drifts). maybeFetchWeather's age throttle decides whether to fetch;
+  // because lastWeatherTime is stamped on every fetch, the age is always measured from
+  // the last actual request (a distance-fetch resets it — no duplicate requests).
+  private startWeatherTimer(): void {
+    this.stopWeatherTimer()
+    this.weatherTimer = window.setInterval(() => {
+      if (this.weatherOn) void this.maybeFetchWeather()
+    }, WEATHER_CHECK_INTERVAL_MS)
+  }
+
+  private stopWeatherTimer(): void {
+    if (this.weatherTimer !== null) {
+      window.clearInterval(this.weatherTimer)
+      this.weatherTimer = null
+    }
+  }
+
+  // Weather release: when noise is off, neutralize temperature to the default (mirrors
+  // releaseTemperature so `reset` returns temperature to neutral). When noise is on,
+  // its reaction resumes jittering temperature/humidity/pressure around the defaults.
+  // (humidity/pressure have no sibling neutral setter — they resume once noise is on.)
+  private releaseWeather(): void {
+    if (this.sensorNoiseOn) return
+    void this.postTemperature(DEFAULT_TEMPERATURE_C).catch(() => { /* best-effort */ })
+  }
+
+  // Fetch + apply weather for the current applied location, subject to the distance
+  // throttle. Serialized (weatherFetching) so the enable + location-change reactions
+  // don't overlap requests.
+  private async maybeFetchWeather(): Promise<void> {
+    if (!this.weatherOn) return
+    // A location change arriving mid-fetch is coalesced and drained after this one
+    // finishes, so a country jump inside the fetch window isn't silently lost.
+    if (this.weatherFetching) { runInAction(() => { this.weatherPending = true }); return }
+    const loc = this.gpsStore.currentLocation
+    if (loc == null) {
+      runInAction(() => { this.weatherError = 'Apply a device location first' })
+      return
+    }
+    const lat = loc.lat
+    const lon = loc.lon
+    // Two triggers, OR'd: re-query on a >10km move (instant — relocation / walk) OR
+    // when the last request is stale (>30 min — stationary device, weather drifts).
+    // Skip only when we're both close AND fresh.
+    if (this.lastWeatherLat != null && this.lastWeatherLon != null && this.lastWeatherTime != null) {
+      const movedFar = haversineKm(lat, lon, this.lastWeatherLat, this.lastWeatherLon) >= WEATHER_DISTANCE_KM
+      const stale = Date.now() - this.lastWeatherTime >= WEATHER_MAX_AGE_MS
+      if (!movedFar && !stale) return
+    }
+    runInAction(() => {
+      this.weatherFetching = true
+      this.weatherApplying = true
+      this.weatherError = null
+      // Record the attempted point + time up-front so BOTH throttles gate successful
+      // and failed attempts, and the age clock restarts from the actual request — so
+      // a distance-driven fetch also resets the 30-min timer (no duplicate at +30min).
+      this.lastWeatherLat = lat
+      this.lastWeatherLon = lon
+      this.lastWeatherTime = Date.now()
+    })
+    try {
+      const result = await this.postWeather(lat, lon)
+      runInAction(() => {
+        if (this.weatherOn) this.weatherStatus = `${Math.round(result.temp * 10) / 10}°C from location`
+      })
+    } catch {
+      runInAction(() => { if (this.weatherOn) this.weatherError = 'Weather unavailable' })
+    } finally {
+      runInAction(() => {
+        this.weatherFetching = false
+        this.weatherApplying = false
+      })
+    }
+    // Drain a change that arrived while fetching: re-read the current location and
+    // re-apply the distance throttle (returns without a fetch once caught up).
+    if (this.weatherPending && this.weatherOn) {
+      runInAction(() => { this.weatherPending = false })
+      void this.maybeFetchWeather()
+    }
+  }
+
+  private async postWeather(lat: number, lon: number): Promise<{ temp: number; humidity: number | null; pressure: number | null }> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) throw new Error('No device')
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), WEATHER_APPLY_TIMEOUT_MS)
+    try {
+      const url = `/manager-api/weather/${encodeURIComponent(device.serial)}`
+      const res = await managerApiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ latitude: lat, longitude: lon }),
+        signal: controller.signal,
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`)
+      return { temp: data.temp, humidity: data.humidity, pressure: data.pressure }
+    } finally {
+      window.clearTimeout(timer)
+    }
+  }
+
   // ===================== Resource model / preemption =====================
   // Generic, map-driven collision handling: a scenario being activated preempts
   // (stops) every running ambient whose owned resources intersect its own.
@@ -321,6 +528,7 @@ export class DeviceScenariosStore {
       case 'rotation': return this.rotateOn
       case 'drain': return this.batteryDrainEnabled
       case 'temperature': return this.temperatureOn
+      case 'weather': return this.weatherOn
     }
   }
 
@@ -386,6 +594,20 @@ export class DeviceScenariosStore {
         // releaseTemperature() neutralizes the held value back to the default.
         this.temperatureOn = false
         this.releaseTemperature()
+        break
+      case 'weather':
+        // Release temperature/humidity/pressure (covers `reset` and preemption). Noise
+        // (if on) resumes jittering them; if noise is off, releaseWeather() neutralizes
+        // temperature back to the default (same contract as the manual operblock).
+        this.weatherOn = false
+        this.weatherStatus = null
+        this.weatherError = null
+        this.lastWeatherLat = null
+        this.lastWeatherLon = null
+        this.lastWeatherTime = null
+        this.weatherPending = false
+        this.stopWeatherTimer()
+        this.releaseWeather()
         break
     }
   }
@@ -645,6 +867,7 @@ export class DeviceScenariosStore {
     this.stopCycle(false)
     this.stopRotate()
     this.stopDrain()
+    this.stopWeatherTimer()
     runInAction(() => {
       this.cycleOn = false
       this.rotateOn = false
@@ -652,6 +875,15 @@ export class DeviceScenariosStore {
       this.temperatureApplying = false
       this.temperatureStatus = null
       this.temperatureError = null
+      this.weatherOn = false
+      this.weatherApplying = false
+      this.weatherStatus = null
+      this.weatherError = null
+      this.lastWeatherLat = null
+      this.lastWeatherLon = null
+      this.lastWeatherTime = null
+      this.weatherFetching = false
+      this.weatherPending = false
       this.activePresets.clear()
     })
   }
