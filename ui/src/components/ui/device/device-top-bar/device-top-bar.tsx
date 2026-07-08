@@ -21,6 +21,7 @@ import { NetworkButton } from './network-button'
 import { BluetoothButton } from './bluetooth-button'
 import { ProxyButton } from './proxy-button'
 import { PhonenumberButton } from './phonenumber-button'
+import { TemperatureButton } from './temperature-button'
 import { ScenariosButton } from './scenarios-button'
 import { BackupButton } from './backup-button'
 
@@ -105,6 +106,7 @@ export const DeviceTopBar = observer(() => {
         <ProxyButton />
         <PhonenumberButton />
         <PoseButton />
+        <TemperatureButton />
         <ScenariosButton />
         <BackupButton />
 

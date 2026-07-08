@@ -41,6 +41,16 @@ const MIN_CYCLE_PERIOD_SEC = 4
 const DEFAULT_ROTATE_INTERVAL_SEC = 20
 const MIN_ROTATE_INTERVAL_SEC = 2
 
+// Ambient: manual temperature operblock (°C). Realistic sub-range; the backend
+// guards a wider physical range.
+const DEFAULT_TEMPERATURE_C = 25
+const MIN_TEMPERATURE_C = -20
+const MAX_TEMPERATURE_C = 45
+// Client-side ceiling on a temperature Apply. Above the manager's 6s console
+// timeout, so a slow-but-successful apply isn't cut off, but a hung/bogged manager
+// surfaces "Apply failed" instead of a forever-spinning button.
+const TEMPERATURE_APPLY_TIMEOUT_MS = 10000
+
 // "Low battery" preset target (%).
 const LOW_BATTERY_PCT = 15
 
@@ -58,9 +68,14 @@ export type ScenarioPreset = 'onCharge' | 'metro' | 'reset' | 'lowBattery'
 
 // Device resources a scenario can own. Used for anti-collision between ambient
 // scenarios and one-shot presets (preset always wins).
-export type ScenarioResource = 'light' | 'pose' | 'signal' | 'charging' | 'batteryLevel'
+export type ScenarioResource = 'light' | 'pose' | 'signal' | 'charging' | 'batteryLevel' | 'temperature'
 
-type AmbientId = 'dayNight' | 'rotation' | 'drain'
+// Resources whose sensors the "Realistic sensors" noise drives, and therefore
+// must yield when an operblock owns them. Kept in sync with the backend's
+// RESOURCE_SENSORS (domain/sensor-noise.js).
+const NOISE_RESOURCES: ScenarioResource[] = ['light', 'pose', 'temperature']
+
+type AmbientId = 'dayNight' | 'rotation' | 'drain' | 'temperature'
 
 // Stable key for any active resource owner — an ambient scenario or a preset.
 // Lets preemption treat both kinds uniformly (no per-pair logic).
@@ -71,6 +86,8 @@ const AMBIENT_META: Record<AmbientId, { resources: ScenarioResource[] }> = {
   dayNight: { resources: ['light'] },
   rotation: { resources: ['pose'] },
   drain: { resources: ['batteryLevel'] },
+  // Manual set-and-hold (no timer); owns `temperature` so noise yields it.
+  temperature: { resources: ['temperature'] },
 }
 
 // Resources each preset writes. `reset` is special-cased (stops ALL ambient).
@@ -117,6 +134,17 @@ export class DeviceScenariosStore {
   // told which of {light, pose} are currently owned so it skips those sensors.
   sensorNoiseOn = false
 
+  // Ambient "Temperature" operblock: manual set-and-hold of the ambient
+  // temperature sensor (°C). When on, owns the `temperature` resource so noise
+  // yields the temperature sensor and the set value holds.
+  temperatureOn = false
+  temperatureC = DEFAULT_TEMPERATURE_C
+  // Explicit-Apply feedback (so a manager timeout isn't silent): applying spinner,
+  // last success message, and last error message for the Temperature popover.
+  temperatureApplying = false
+  temperatureStatus: string | null = null
+  temperatureError: string | null = null
+
   // ----- internal (non-observable) timer/loop state -----
   private cycleTimer: number | null = null
   private rotateTimer: number | null = null
@@ -153,7 +181,7 @@ export class DeviceScenariosStore {
   private get noiseOwnedResources(): ScenarioResource[] {
     const owned = new Set<ScenarioResource>()
     for (const o of this.activeOwners()) {
-      for (const r of o.resources) if (r === 'light' || r === 'pose') owned.add(r)
+      for (const r of o.resources) if (NOISE_RESOURCES.includes(r)) owned.add(r)
     }
     return Array.from(owned)
   }
@@ -182,6 +210,105 @@ export class DeviceScenariosStore {
     void this.pushSensorNoise()
   }
 
+  // ===================== Ambient: Temperature operblock =====================
+  // Manual set-and-hold of the ambient temperature sensor via the console. Owns
+  // the `temperature` resource so sensor-noise yields the temperature sensor.
+
+  // The °C field only SETS the value (so negatives type cleanly on commit-on-blur and
+  // the value is available to the resource model). It is applied to the device
+  // EXPLICITLY via the Apply button (or Enter) — never implicitly. See applyTemperatureNow().
+  setTemperatureValue(value: number): void {
+    runInAction(() => { this.temperatureC = clampInt(value, MIN_TEMPERATURE_C, MAX_TEMPERATURE_C) })
+  }
+
+  // Explicit apply (Apply button / Enter): push the current value to the device when
+  // the operblock is active, reporting success/failure so a manager timeout isn't
+  // silent. No-op when the operblock is off (nothing owns the temperature sensor).
+  async applyTemperatureNow(): Promise<void> {
+    if (!this.temperatureOn || this.temperatureApplying) return
+    await this.applyReporting()
+  }
+
+  toggleTemperature(on: boolean): void {
+    if (on) {
+      // Newest-wins (uniform with every owner), then claim `temperature`.
+      this.preemptConflicting(AMBIENT_META.temperature.resources, 'ambient:temperature')
+      runInAction(() => { this.temperatureOn = true })
+      void this.enableTemperature()
+    } else {
+      runInAction(() => {
+        this.temperatureOn = false
+        this.temperatureStatus = null
+        this.temperatureError = null
+      })
+      this.releaseTemperature()
+    }
+  }
+
+  // Turning the operblock on applies the current value immediately. Order matters:
+  // make noise yield the temperature sensor FIRST (so a noise tick can't overwrite our
+  // set), THEN apply. Continuous operblocks self-heal; temperature is set-and-hold.
+  private async enableTemperature(): Promise<void> {
+    if (this.sensorNoiseOn) await this.pushSensorNoise()
+    await this.applyReporting()
+  }
+
+  // Push this.temperatureC and reflect the outcome in the popover (applying / applied /
+  // failed). Used by both the Apply button and by enabling the operblock.
+  private async applyReporting(): Promise<void> {
+    // Serialize applies (Apply button is disabled while applying, but the Enter key
+    // and a quick toggle-off/on would otherwise overlap two POSTs with no ordering).
+    if (this.temperatureApplying) return
+    const celsius = this.temperatureC
+    runInAction(() => {
+      this.temperatureApplying = true
+      this.temperatureStatus = null
+      this.temperatureError = null
+    })
+    try {
+      await this.postTemperature(celsius)
+      // Only report if the operblock is still on — if it was toggled off mid-apply,
+      // a stale "Applied N°C" next to an off switch would be misleading.
+      runInAction(() => { if (this.temperatureOn) this.temperatureStatus = `Applied ${celsius}°C` })
+    } catch {
+      runInAction(() => { if (this.temperatureOn) this.temperatureError = 'Apply failed — device busy' })
+    } finally {
+      runInAction(() => { this.temperatureApplying = false })
+    }
+  }
+
+  // Releasing the operblock. When noise is on, its reaction re-pushes ownership
+  // (temperature dropped) and noise resumes jittering the sensor around the default,
+  // so no device write is needed here. When noise is OFF, nothing else would move the
+  // sensor off the held value — so neutralize it back to the default explicitly. This
+  // keeps the `reset` preset's "return everything to neutral" contract for temperature
+  // (light/pose already neutralize on release; temperature must too). Best-effort.
+  private releaseTemperature(): void {
+    if (this.sensorNoiseOn) return
+    void this.postTemperature(DEFAULT_TEMPERATURE_C).catch(() => { /* best-effort */ })
+  }
+
+  // Low-level POST with a client-side timeout. Throws on network error, non-2xx, or
+  // timeout so callers can surface the failure (managerApiFetch never throws on non-2xx).
+  private async postTemperature(celsius: number): Promise<void> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) throw new Error('No device')
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), TEMPERATURE_APPLY_TIMEOUT_MS)
+    try {
+      const url = `/manager-api/temperature/${encodeURIComponent(device.serial)}`
+      const res = await managerApiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ celsius }),
+        signal: controller.signal,
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    } finally {
+      window.clearTimeout(timer)
+    }
+  }
+
   // ===================== Resource model / preemption =====================
   // Generic, map-driven collision handling: a scenario being activated preempts
   // (stops) every running ambient whose owned resources intersect its own.
@@ -193,6 +320,7 @@ export class DeviceScenariosStore {
       case 'dayNight': return this.cycleOn
       case 'rotation': return this.rotateOn
       case 'drain': return this.batteryDrainEnabled
+      case 'temperature': return this.temperatureOn
     }
   }
 
@@ -251,6 +379,13 @@ export class DeviceScenariosStore {
         break
       case 'drain':
         this.stopDrain()
+        break
+      case 'temperature':
+        // Release the resource (covers `reset` and preemption). If noise is on, its
+        // reaction resumes jittering the temperature sensor; if noise is off,
+        // releaseTemperature() neutralizes the held value back to the default.
+        this.temperatureOn = false
+        this.releaseTemperature()
         break
     }
   }
@@ -513,6 +648,10 @@ export class DeviceScenariosStore {
     runInAction(() => {
       this.cycleOn = false
       this.rotateOn = false
+      this.temperatureOn = false
+      this.temperatureApplying = false
+      this.temperatureStatus = null
+      this.temperatureError = null
       this.activePresets.clear()
     })
   }

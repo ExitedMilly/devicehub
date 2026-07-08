@@ -52,6 +52,9 @@ const RESOURCE_SENSORS = {
     light: ['light'],
     pose: ['acceleration', 'orientation', 'magnetic-field',
            'acceleration-uncalibrated', 'magnetic-field-uncalibrated'],
+    // temperature operblock (console `sensor set temperature`) — noise yields the
+    // ambient temperature sensor so it holds the user-set value instead of ~25°C.
+    temperature: ['temperature'],
 };
 
 const sessions = new Map(); // serial -> session
