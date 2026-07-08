@@ -99,6 +99,15 @@ export const ScenariosButton = observer(() => {
           <div className={styles.sectionTitle}>Ambient</div>
 
           <div className={styles.field}>
+            <label className={styles.label} htmlFor='scn-noise'>Realistic sensors</label>
+            <Switch
+              checked={scenarios.sensorNoiseOn}
+              id='scn-noise'
+              onChange={(e) => scenarios.toggleSensorNoise(e.target.checked)}
+            />
+          </div>
+
+          <div className={styles.field}>
             <label className={styles.label} htmlFor='scn-cycle'>Day / Night cycle</label>
             <Switch
               checked={scenarios.cycleOn}

@@ -1,4 +1,4 @@
-import { makeAutoObservable, runInAction } from 'mobx'
+import { makeAutoObservable, runInAction, reaction } from 'mobx'
 import { inject, injectable } from 'inversify'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
@@ -7,6 +7,8 @@ import { DeviceLightStore } from '@/store/device-light-store'
 import { DeviceBatteryStore } from '@/store/device-battery-store'
 import { DevicePoseStore } from '@/store/device-pose-store'
 import { DeviceNetworkStore } from '@/store/device-network-store'
+import { DeviceBySerialStore } from '@/store/device-by-serial-store'
+import { managerApiFetch } from '@/api/manager-api'
 
 // ===========================================================================
 // Calibration defaults — tweak freely. Every magic number a scenario applies
@@ -110,6 +112,11 @@ export class DeviceScenariosStore {
   drainFloorPct = DEFAULT_DRAIN_FLOOR_PCT
   drainIntervalSec = DEFAULT_DRAIN_INTERVAL_SEC
 
+  // Ambient "Realistic sensors": keeps all sensors slightly jittering (no dead
+  // zeros). Coordinates with operblocks via the resource model — the backend is
+  // told which of {light, pose} are currently owned so it skips those sensors.
+  sensorNoiseOn = false
+
   // ----- internal (non-observable) timer/loop state -----
   private cycleTimer: number | null = null
   private rotateTimer: number | null = null
@@ -125,9 +132,54 @@ export class DeviceScenariosStore {
     @inject(CONTAINER_IDS.deviceLightStore) private light: DeviceLightStore,
     @inject(CONTAINER_IDS.deviceBatteryStore) private battery: DeviceBatteryStore,
     @inject(CONTAINER_IDS.devicePoseStore) private pose: DevicePoseStore,
-    @inject(CONTAINER_IDS.deviceNetworkStore) private network: DeviceNetworkStore
+    @inject(CONTAINER_IDS.deviceNetworkStore) private network: DeviceNetworkStore,
+    @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore
   ) {
     makeAutoObservable(this)
+
+    // Re-push the owned-resource set to the sensor-noise backend whenever it
+    // changes (an operblock claimed/released light or pose), while noise is on —
+    // so noise keeps yielding exactly the sensors an operblock currently drives.
+    reaction(
+      () => this.noiseOwnedKey,
+      () => { if (this.sensorNoiseOn) void this.pushSensorNoise() }
+    )
+  }
+
+  // ===================== Realistic sensors (noise) =====================
+
+  // Owned resources the noise cares about (they map to sensors it drives):
+  // light -> light sensor; pose -> accel/orientation/magnetometer.
+  private get noiseOwnedResources(): ScenarioResource[] {
+    const owned = new Set<ScenarioResource>()
+    for (const o of this.activeOwners()) {
+      for (const r of o.resources) if (r === 'light' || r === 'pose') owned.add(r)
+    }
+    return Array.from(owned)
+  }
+
+  private get noiseOwnedKey(): string {
+    return this.noiseOwnedResources.slice().sort().join(',')
+  }
+
+  private async pushSensorNoise(): Promise<void> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) return
+    try {
+      const url = `/manager-api/sensor-noise/${encodeURIComponent(device.serial)}`
+      await managerApiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: this.sensorNoiseOn, owned: this.noiseOwnedResources }),
+      })
+    } catch {
+      // transient — the reaction / next toggle will re-sync
+    }
+  }
+
+  toggleSensorNoise(on: boolean): void {
+    runInAction(() => { this.sensorNoiseOn = on })
+    void this.pushSensorNoise()
   }
 
   // ===================== Resource model / preemption =====================
