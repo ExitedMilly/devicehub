@@ -1,0 +1,32 @@
+.buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 12px 0;
+}
+
+.buttons > * {
+  flex: 1 1 auto;
+}
+
+.toggle {
+  padding: 6px 12px;
+}
+
+.status,
+.error,
+.note {
+  display: block;
+  padding: 6px 12px 0;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.status,
+.note {
+  color: var(--vkui--color_text_secondary);
+}
+
+.error {
+  color: var(--vkui--color_text_negative);
+}

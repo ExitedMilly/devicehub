@@ -13,17 +13,6 @@ import { ScreenQualitySelector } from '@/components/ui/screen-quality-selector'
 import { AudioToggleButton } from './audio-toggle-button'
 import { MicToggleButton } from './mic-toggle-button'
 import { CameraToggleButton } from './camera-toggle-button'
-import { GpsButton } from './gps-button'
-import { PoseButton } from './pose-button'
-import { LightButton } from './light-button'
-import { BatteryButton } from './battery-button'
-import { NetworkButton } from './network-button'
-import { BluetoothButton } from './bluetooth-button'
-import { ProxyButton } from './proxy-button'
-import { PhonenumberButton } from './phonenumber-button'
-import { TemperatureButton } from './temperature-button'
-import { ScenariosButton } from './scenarios-button'
-import { BackupButton } from './backup-button'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
@@ -98,17 +87,6 @@ export const DeviceTopBar = observer(() => {
         <AudioToggleButton />
         <MicToggleButton />
         <CameraToggleButton />
-        <GpsButton />
-        <LightButton />
-        <BatteryButton />
-        <NetworkButton />
-        <BluetoothButton />
-        <ProxyButton />
-        <PhonenumberButton />
-        <PoseButton />
-        <TemperatureButton />
-        <ScenariosButton />
-        <BackupButton />
 
         <Button
           appearance='neutral'

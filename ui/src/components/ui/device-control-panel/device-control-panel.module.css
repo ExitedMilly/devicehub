@@ -1,5 +1,14 @@
 .deviceControlPanel {
   overflow: auto;
-  padding: 14px 14px 14px 10px;
   background: var(--vkui--color_background_secondary);
+}
+
+/* One collapsible block per operblock, stacked in a single full-width vertical column.
+   Blocks take their content height and start collapsed; the whole panel scrolls
+   vertically as one. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
 }

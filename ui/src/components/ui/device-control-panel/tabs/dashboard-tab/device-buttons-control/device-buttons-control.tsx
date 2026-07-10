@@ -34,7 +34,7 @@ import { ButtonControl } from './button-control'
 
 import styles from './device-buttons-control.module.css'
 
-export const DeviceButtonsControl = observer(({ className }: { className?: string }) => {
+export const DeviceButtonsControl = observer(({ className, bare }: { className?: string; bare?: boolean }) => {
   const { t } = useTranslation()
 
   const deviceControlStore = useInjection(CONTAINER_IDS.deviceControlStore)
@@ -47,12 +47,7 @@ export const DeviceButtonsControl = observer(({ className }: { className?: strin
     },
   })
 
-  return (
-    <ContentCard
-      before={<Icon28SettingsOutline height={20} width={20} />}
-      className={className}
-      title={t('Device Buttons')}
-    >
+  const content = (
       <FormLayoutGroup>
         <FormItem top={t('Special Keys')}>
           <div className={styles.buttonsContainer}>
@@ -226,6 +221,20 @@ export const DeviceButtonsControl = observer(({ className }: { className?: strin
           </>
         )}
       </FormLayoutGroup>
+  )
+
+  // `bare` renders just the controls (no card/title) so this can sit inside a
+  // PanelSection as the "Device Buttons" operblock block; otherwise the standalone
+  // ContentCard is used (unchanged original behaviour).
+  if (bare) return content
+
+  return (
+    <ContentCard
+      before={<Icon28SettingsOutline height={20} width={20} />}
+      className={className}
+      title={t('Device Buttons')}
+    >
+      {content}
     </ContentCard>
   )
 })

@@ -1,0 +1,195 @@
+/* Shared form styles for the control-panel operblock blocks. Superset of the old
+ * top-bar button CSS (pose-button/gps-button/backup-button), minus the popup
+ * positioning — blocks are full-width and inline. All colours are VKUI tokens so the
+ * blocks theme light/dark for free. */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.field + .field {
+  margin-top: 10px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.row .field + .field {
+  margin-top: 0;
+}
+
+.label {
+  font-size: 12px;
+  color: var(--vkui--color_text_secondary);
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--vkui--color_separator_primary);
+  border-radius: 8px;
+  background: var(--vkui--color_background_content);
+  color: var(--vkui--color_text_primary);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  border-color: var(--vkui--color_stroke_accent);
+}
+
+.input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.applyButton,
+.stopButton,
+.presetButton,
+.restoreButton {
+  flex: 1 1 0;
+  min-width: 96px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.applyButton {
+  background: var(--vkui--color_background_accent_themed);
+  color: var(--vkui--color_text_contrast_themed);
+}
+
+.stopButton {
+  background: var(--vkui--color_background_negative);
+  color: var(--vkui--color_text_contrast_themed);
+}
+
+.presetButton {
+  background: var(--vkui--color_transparent--hover);
+  color: var(--vkui--color_text_primary);
+}
+
+.restoreButton {
+  background: var(--vkui--color_background_content);
+  color: var(--vkui--color_text_primary);
+  border: 1px solid var(--vkui--color_separator_primary);
+}
+
+.applyButton:disabled,
+.stopButton:disabled,
+.presetButton:disabled,
+.restoreButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.presets .presetButton {
+  flex: 1 1 calc(50% - 4px);
+  min-width: 110px;
+  padding: 9px 10px;
+}
+
+.status,
+.error {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.status {
+  color: var(--vkui--color_text_secondary);
+}
+
+.error {
+  color: var(--vkui--color_text_negative);
+}
+
+.hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--vkui--color_text_secondary);
+  margin-bottom: 12px;
+}
+
+.hint code {
+  font-family: monospace;
+  background: var(--vkui--color_transparent--hover);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.divider {
+  margin: 16px 0 12px 0;
+  border: none;
+  border-top: 1px solid var(--vkui--color_separator_primary);
+}
+
+/* Sub-operblock label. Muted (secondary) subtitle so it reads as a section marker
+   above each operblock, distinct from the operblock's own content. Paired with the
+   theme .divider above it (every sub-block except the first) for clean separation. */
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--vkui--color_text_secondary);
+  margin-bottom: 8px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.iconButton {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  margin-bottom: 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--vkui--color_transparent--hover);
+  color: var(--vkui--color_text_primary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settingsPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--vkui--color_separator_primary);
+  border-radius: 8px;
+  background: var(--vkui--color_background_content);
+}
+
+.settingRow {
+  font-size: 13px;
+  color: var(--vkui--color_text_primary);
+}

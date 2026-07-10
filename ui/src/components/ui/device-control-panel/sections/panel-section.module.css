@@ -1,0 +1,35 @@
+.card {
+  /* Card mode="tint" supplies the (non-black) surface, matching DeviceButtonsControl.
+     Keep the block compact and let its content define the height. */
+  overflow: hidden;
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--vkui--color_text_primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Green "something in this block is active" indicator. */
+.activeDot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vkui--color_icon_positive);
+  box-shadow: 0 0 0 3px var(--vkui--color_background_positive_tint);
+}
+
+.content {
+  padding: 4px 8px 12px;
+}
