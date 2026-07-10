@@ -67,6 +67,16 @@ const WEATHER_APPLY_TIMEOUT_MS = 15000
 const WEATHER_MAX_AGE_MS = 30 * 60 * 1000     // 30 min
 const WEATHER_CHECK_INTERVAL_MS = 60 * 1000   // how often the age is checked
 
+// "Sync Wi-Fi with location (BSSID)": same distance+age throttle as weather, but the
+// Wi-Fi environment is LOCAL (changes over hundreds of metres), so a much smaller
+// distance threshold; the tile's APs don't move, so a longer max age. APP-LEVEL ONLY —
+// fills getScanResults() with the location's real BSSIDs; does NOT move system/fused
+// geolocation (see domain/wifi-geo.js). Apple tiles are larger, so a longer timeout.
+const BSSID_DISTANCE_KM = 0.7               // ~700 m — Wi-Fi is a local fingerprint
+const BSSID_APPLY_TIMEOUT_MS = 22000
+const BSSID_MAX_AGE_MS = 60 * 60 * 1000     // 1 h
+const BSSID_CHECK_INTERVAL_MS = 5 * 60 * 1000 // staleness check cadence
+
 // "Low battery" preset target (%).
 const LOW_BATTERY_PCT = 15
 
@@ -195,6 +205,20 @@ export class DeviceScenariosStore {
   private weatherPending = false
   private weatherTimer: number | null = null
 
+  // Ambient "Sync Wi-Fi with location (BSSID)": injects the location's real BSSIDs
+  // (Apple WLOC) into getScanResults(). APP-LEVEL ONLY — does NOT move system/fused
+  // geolocation. Same distance+age throttle as weather (tuned smaller/longer for Wi-Fi).
+  bssidSyncOn = false
+  bssidApplying = false
+  bssidStatus: string | null = null
+  bssidError: string | null = null
+  private lastBssidLat: number | null = null
+  private lastBssidLon: number | null = null
+  private lastBssidTime: number | null = null
+  private bssidFetching = false
+  private bssidPending = false
+  private bssidTimer: number | null = null
+
   // ----- internal (non-observable) timer/loop state -----
   private cycleTimer: number | null = null
   private rotateTimer: number | null = null
@@ -230,6 +254,13 @@ export class DeviceScenariosStore {
     reaction(
       () => this.weatherLocationKey,
       () => { if (this.weatherOn) void this.maybeFetchWeather() }
+    )
+
+    // Same pattern for BSSID-sync: re-inject the location's Wi-Fi BSSIDs when the
+    // applied/walk location changes (distance-throttled inside maybeFetchBssid).
+    reaction(
+      () => this.bssidLocationKey,
+      () => { if (this.bssidSyncOn) void this.maybeFetchBssid() }
     )
   }
 
@@ -514,6 +545,132 @@ export class DeviceScenariosStore {
     } finally {
       window.clearTimeout(timer)
     }
+  }
+
+  // ===================== Sync Wi-Fi with location (BSSID) =====================
+  // Injects the location's real BSSIDs (Apple WLOC) into getScanResults(). Same
+  // currentLocation + distance/age throttle as weather. APP-LEVEL ONLY: it does NOT
+  // move the system/fused geolocation — only apps that read getScanResults() directly
+  // (e.g. antifraud GPS↔Wi-Fi cross-checks) see it. Merged with any manual fake scan.
+
+  private get bssidLocationKey(): string {
+    if (!this.bssidSyncOn) return ''
+    const loc = this.gpsStore.currentLocation
+    return loc == null ? '' : `${loc.lat},${loc.lon}`
+  }
+
+  toggleBssidSync(on: boolean): void {
+    if (on) {
+      runInAction(() => {
+        this.bssidSyncOn = true
+        this.bssidStatus = null
+        this.bssidError = null
+        this.lastBssidLat = null
+        this.lastBssidLon = null
+        this.lastBssidTime = null
+      })
+      this.startBssidTimer()
+      // The bssidLocationKey reaction fires the initial injection.
+    } else {
+      runInAction(() => {
+        this.bssidSyncOn = false
+        this.bssidStatus = null
+        this.bssidError = null
+        this.lastBssidLat = null
+        this.lastBssidLon = null
+        this.lastBssidTime = null
+        this.bssidPending = false
+      })
+      this.stopBssidTimer()
+      this.releaseBssid()
+    }
+  }
+
+  private startBssidTimer(): void {
+    this.stopBssidTimer()
+    this.bssidTimer = window.setInterval(() => {
+      if (this.bssidSyncOn) void this.maybeFetchBssid()
+    }, BSSID_CHECK_INTERVAL_MS)
+  }
+
+  private stopBssidTimer(): void {
+    if (this.bssidTimer !== null) {
+      window.clearInterval(this.bssidTimer)
+      this.bssidTimer = null
+    }
+  }
+
+  private async maybeFetchBssid(): Promise<void> {
+    if (!this.bssidSyncOn) return
+    if (this.bssidFetching) { runInAction(() => { this.bssidPending = true }); return }
+    const loc = this.gpsStore.currentLocation
+    if (loc == null) {
+      runInAction(() => { this.bssidError = 'Apply a device location first' })
+      return
+    }
+    const lat = loc.lat
+    const lon = loc.lon
+    // Re-inject on a >700m move OR when stale (>1h). Skip only when close AND fresh.
+    if (this.lastBssidLat != null && this.lastBssidLon != null && this.lastBssidTime != null) {
+      const movedFar = haversineKm(lat, lon, this.lastBssidLat, this.lastBssidLon) >= BSSID_DISTANCE_KM
+      const stale = Date.now() - this.lastBssidTime >= BSSID_MAX_AGE_MS
+      if (!movedFar && !stale) return
+    }
+    runInAction(() => {
+      this.bssidFetching = true
+      this.bssidApplying = true
+      this.bssidError = null
+      this.lastBssidLat = lat
+      this.lastBssidLon = lon
+      this.lastBssidTime = Date.now()
+    })
+    try {
+      const result = await this.postBssid(lat, lon)
+      runInAction(() => {
+        if (this.bssidSyncOn) this.bssidStatus = `${result.count} BSSIDs from location`
+      })
+    } catch {
+      runInAction(() => { if (this.bssidSyncOn) this.bssidError = 'Wi-Fi lookup unavailable' })
+    } finally {
+      runInAction(() => {
+        this.bssidFetching = false
+        this.bssidApplying = false
+      })
+    }
+    if (this.bssidPending && this.bssidSyncOn) {
+      runInAction(() => { this.bssidPending = false })
+      void this.maybeFetchBssid()
+    }
+  }
+
+  private async postBssid(lat: number, lon: number): Promise<{ count: number; total: number }> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) throw new Error('No device')
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), BSSID_APPLY_TIMEOUT_MS)
+    try {
+      const url = `/manager-api/wifi-geo/${encodeURIComponent(device.serial)}`
+      const res = await managerApiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ latitude: lat, longitude: lon }),
+        signal: controller.signal,
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`)
+      return { count: data.count, total: data.total }
+    } finally {
+      window.clearTimeout(timer)
+    }
+  }
+
+  // Remove the injected location BSSIDs (the manual fake scan, if any, is untouched).
+  private releaseBssid(): void {
+    void (async () => {
+      const device = await this.deviceBySerialStore.fetch()
+      if (!device?.serial) return
+      await managerApiFetch(`/manager-api/wifi-geo/${encodeURIComponent(device.serial)}`, { method: 'DELETE' })
+    })().catch(() => { /* best-effort */ })
   }
 
   // ===================== Resource model / preemption =====================
@@ -868,6 +1025,7 @@ export class DeviceScenariosStore {
     this.stopRotate()
     this.stopDrain()
     this.stopWeatherTimer()
+    this.stopBssidTimer()
     runInAction(() => {
       this.cycleOn = false
       this.rotateOn = false
@@ -884,6 +1042,15 @@ export class DeviceScenariosStore {
       this.lastWeatherTime = null
       this.weatherFetching = false
       this.weatherPending = false
+      this.bssidSyncOn = false
+      this.bssidApplying = false
+      this.bssidStatus = null
+      this.bssidError = null
+      this.lastBssidLat = null
+      this.lastBssidLon = null
+      this.lastBssidTime = null
+      this.bssidFetching = false
+      this.bssidPending = false
       this.activePresets.clear()
     })
   }

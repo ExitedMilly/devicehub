@@ -187,6 +187,32 @@ export const GpsButton = observer(() => {
                     : (scenarios.weatherError ?? scenarios.weatherStatus)}
                 </div>
               )}
+
+              {/* Real BSSIDs of the location (Apple WLOC) injected into getScanResults().
+                  APP-LEVEL ONLY — does not move the system/fused geolocation. */}
+              <div
+                className={styles.settingRow}
+                title="App-level only: fills getScanResults() with the location's real BSSIDs for apps that read the Wi-Fi scan (e.g. antifraud). Does NOT change system/fused geolocation."
+              >
+                <Checkbox
+                  checked={scenarios.bssidSyncOn}
+                  onChange={(e) => scenarios.toggleBssidSync(e.target.checked)}
+                >
+                  Sync Wi-Fi with location (BSSID)
+                </Checkbox>
+              </div>
+              {(scenarios.bssidApplying || scenarios.bssidError || scenarios.bssidStatus) && (
+                <div className={scenarios.bssidError ? styles.error : styles.status}>
+                  {scenarios.bssidApplying
+                    ? 'Looking up Wi-Fi…'
+                    : (scenarios.bssidError ?? scenarios.bssidStatus)}
+                </div>
+              )}
+              {scenarios.bssidSyncOn && (
+                <div className={styles.status}>
+                  App-level only — apps reading the Wi-Fi scan; not system/fused location.
+                </div>
+              )}
             </div>
           )}
 
