@@ -108,6 +108,13 @@ class Instance:
     phone_number: Optional[str] = None
     # Optional per-instance emulator image override (defaults to defaults.emulator_image).
     emulator_image: Optional[str] = None
+    # Optional per-instance INITIAL GPS location, applied by the manager after boot
+    # (startGpsKeepAlive via the GPS mock), so a fresh device shows this instead of the
+    # emulator's Googleplex default (37.422,-122.084). Just a starting value — the user
+    # can set their own location in the UI on top (it replaces this). Both must be set
+    # together (lat -90..90, lon -180..180). Empty => emulator default (no-op).
+    initial_lat: Optional[float] = None
+    initial_lon: Optional[float] = None
 
 
 @dataclass
@@ -427,6 +434,24 @@ def validate(config: Config) -> list:
                 errors.append(
                     f"{inst.name}: wifi_mac needs wifi_ssid set (only applies to the netsim Wi-Fi)"
                 )
+
+        # 8.10. initial_lat/initial_lon: both-or-neither, and within valid ranges.
+        has_lat = inst.initial_lat is not None
+        has_lon = inst.initial_lon is not None
+        if has_lat != has_lon:
+            errors.append(
+                f"{inst.name}: initial_lat and initial_lon must both be set (or both omitted)"
+            )
+        elif has_lat and has_lon:
+            try:
+                lat = float(inst.initial_lat)
+                lon = float(inst.initial_lon)
+                if not (-90.0 <= lat <= 90.0):
+                    errors.append(f"{inst.name}: initial_lat '{inst.initial_lat}' must be between -90 and 90")
+                if not (-180.0 <= lon <= 180.0):
+                    errors.append(f"{inst.name}: initial_lon '{inst.initial_lon}' must be between -180 and 180")
+            except (TypeError, ValueError):
+                errors.append(f"{inst.name}: initial_lat/initial_lon must be numbers")
 
     return errors
 

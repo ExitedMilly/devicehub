@@ -85,7 +85,7 @@ docker run -d \
     -e BACKUP_DIR="/backups" \
     -e LOG_PRETTY="${LOG_PRETTY:-1}" \
     -e STF_SECRET="${STF_SECRET:-nosecret}" \
-    -e AUTH_REQUIRED="${AUTH_REQUIRED:-0}"{% if instance.wifi_ssid %} -e WIFI_SSID="{{ instance.wifi_ssid }}"{% if instance.wifi_password %} -e WIFI_PASSWORD="{{ instance.wifi_password }}"{% endif %}{% if instance.wifi_mac %} -e WIFI_MAC="{{ instance.wifi_mac }}"{% endif %}{% endif %} \
+    -e AUTH_REQUIRED="${AUTH_REQUIRED:-0}"{% if instance.wifi_ssid %} -e WIFI_SSID="{{ instance.wifi_ssid }}"{% if instance.wifi_password %} -e WIFI_PASSWORD="{{ instance.wifi_password }}"{% endif %}{% if instance.wifi_mac %} -e WIFI_MAC="{{ instance.wifi_mac }}"{% endif %}{% endif %}{% if instance.initial_lat is not none %} -e INITIAL_LAT="{{ instance.initial_lat }}" -e INITIAL_LON="{{ instance.initial_lon }}"{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "{{ env.BACKUPS_DIR }}:/backups" \
     -v "${TOKEN_FILE}:/run/console-token:ro" \

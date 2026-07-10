@@ -44,10 +44,17 @@ defaults:
 #     its validator regex aborts qemu — so we use the bootconfig path.)
 #   wifi_mac — sets wlan0's MAC, applied by the manager's wifi-autoconnect after
 #     boot (ip link + join with -r none). Needs wifi_ssid. Example:
+#   initial_lat / initial_lon — INITIAL GPS location applied by the manager after
+#     boot (GPS mock keepalive), so a fresh device shows this instead of the
+#     emulator's Googleplex default (37.422,-122.084). Both must be set together
+#     (lat -90..90, lon -180..180). Starting value only — the user can override it
+#     from the UI (their apply replaces it). Omit both => emulator default (no-op).
 #   - name: id1
 #     ...
 #     serialno: "MYSERIAL123"
 #     wifi_mac: "02:00:17:00:00:01"
+#     initial_lat: 55.751244
+#     initial_lon: 37.618423
 
 # Optional per-instance BT signal strength (RSSI in dBm) via netsim, applied at
 # launch (needs the op-v2 / 36.6 image). Value is an i8 (-128..127). A bare
@@ -148,3 +155,8 @@ instances:
     # wifi_mac -> wlan0 MAC, applied by the manager after boot (needs wifi_ssid).
     serialno: "ORCHIDTEST3A1"
     wifi_mac: "02:00:17:03:00:03"
+    # Initial GPS location applied after boot (Moscow, Red Square) so the device
+    # doesn't show the emulator's Googleplex default. Starting value only — the user
+    # can set their own location in the UI on top.
+    initial_lat: 55.751244
+    initial_lon: 37.618423

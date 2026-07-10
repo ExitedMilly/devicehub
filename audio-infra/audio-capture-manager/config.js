@@ -69,6 +69,15 @@ const WIFI_MAC = process.env.WIFI_MAC || null;
 // it via the telnet console after boot. Empty => leave the emulator default.
 const PHONE_NUMBER = process.env.PHONE_NUMBER || null;
 
+// Optional: per-instance INITIAL GPS location. When both are set, the manager applies
+// them after boot (GPS mock keepalive) so a fresh device shows this instead of the
+// emulator's Googleplex default. Just a starting value — the user can override it in
+// the UI. Empty/invalid => no-op (emulator default stays).
+const _initLat = parseFloat(process.env.INITIAL_LAT);
+const _initLon = parseFloat(process.env.INITIAL_LON);
+const INITIAL_LAT = Number.isFinite(_initLat) ? _initLat : null;
+const INITIAL_LON = Number.isFinite(_initLon) ? _initLon : null;
+
 // Auth config (P0.6)
 const STF_SECRET = process.env.STF_SECRET || null;
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === '1';
@@ -95,6 +104,7 @@ module.exports = {
     EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
     PULSE_SINK_NAME, PULSE_SOURCE_NAME,
     WIFI_SSID, WIFI_PASSWORD, WIFI_MAC, PHONE_NUMBER,
+    INITIAL_LAT, INITIAL_LON,
     STF_SECRET, AUTH_REQUIRED,
     DEVICEHUB_API_HOST, DEVICEHUB_API_PORT,
     OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS,

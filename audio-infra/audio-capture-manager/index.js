@@ -4,6 +4,7 @@ const log = require('./log').getLogger('index');
 const walkSimulator = require('./domain/walk-simulator');
 const poseScenario = require('./domain/pose-scenario');
 const wifiAutoconnect = require('./domain/wifi-autoconnect');
+const gpsInit = require('./domain/gps-init');
 const backupLogical = require('./domain/backup-logical');
 
 const config = require('./config');
@@ -13,6 +14,7 @@ const {
     GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
     SINGLE_MODE, INSTANCE_SERIAL, EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
     AUTH_REQUIRED, STF_SECRET, WIFI_SSID, WIFI_PASSWORD, WIFI_MAC,
+    INITIAL_LAT, INITIAL_LON,
 } = config;
 
 if (AUTH_REQUIRED && !STF_SECRET) {
@@ -120,6 +122,10 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
         // NOTE: the default phone number is now baked into the SIM profile by the
         // emulator op-shim (EF_MSISDN), so there is no manager-side auto-apply.
         // The UI runtime path (routes-phonenumber -> setNumber) still works.
+        // If an initial GPS location is configured, apply it after boot so the device
+        // shows it instead of the emulator's Googleplex default. Just a starting value
+        // — the user can override it in the UI. No-op when INITIAL_LAT/LON are unset.
+        gpsInit.start(INSTANCE_SERIAL, INITIAL_LAT, INITIAL_LON);
     }
 });
 
