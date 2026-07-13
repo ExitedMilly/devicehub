@@ -232,6 +232,11 @@ export const ConstructorTab = observer(() => {
 
   const warnings = scenarioWarnings(params)
 
+  // Live hint for the hard gps-location requirement (weather/bssid can't apply without
+  // it on the backend). validate() also blocks Save, but flag it inline while building.
+  const presentSet = new Set(presentTypes)
+  const needsGps = (presentSet.has('weather.on') || presentSet.has('bssid.on')) && !presentSet.has('gps.location')
+
   // Group the picker options by catalog group, marking added/conflicting ones.
   const groups = [...new Set(PARAM_DEFS.map((d) => d.group))]
 
@@ -325,6 +330,10 @@ export const ConstructorTab = observer(() => {
             </div>
           )
         })}
+
+        {needsGps && (
+          <div className={styles.warning}>⚠ Add “GPS location” — Weather / Wi-Fi (BSSID) sync need a location to apply.</div>
+        )}
 
         {warnings.map((w) => (
           <div className={styles.warning} key={w}>⚠ {w}</div>

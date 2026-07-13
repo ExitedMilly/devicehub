@@ -21,6 +21,7 @@ const { handleTemperature } = require('./routes-temperature');
 const { handleWeather } = require('./routes-weather');
 const { handleWifiGeo } = require('./routes-wifi-geo');
 const { handlePhonenumber } = require('./routes-phonenumber');
+const { handleScenarios } = require('./routes-scenarios');
 const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
 const { handleFileInject } = require('./routes-file-inject');
@@ -47,6 +48,7 @@ const handlers = [
     handleWeather,
     handleWifiGeo,
     handlePhonenumber,
+    handleScenarios,
     handleBackup,
     handleVideo,
     handleFileInject,

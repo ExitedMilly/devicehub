@@ -760,6 +760,15 @@ export class DeviceScenariosStore {
     this.activeCustom.delete(id)
   }
 
+  // Reflect a backend-applied sensor-noise change into this store's flag WITHOUT
+  // re-pushing to the device (the backend already set it). Keeps the "Realistic
+  // sensors" toggle honest and stops the noiseOwnedKey reaction from later restarting
+  // a session a scenario turned off (or leaving it stale-off after a scenario turned
+  // it on). A no-op if the flag already matches.
+  reflectSensorNoise(on: boolean): void {
+    if (this.sensorNoiseOn !== on) runInAction(() => { this.sensorNoiseOn = on })
+  }
+
   isCustomScenarioActive(id: string): boolean {
     return this.activeCustom.has(id)
   }

@@ -3,23 +3,17 @@ import { inject, injectable } from 'inversify'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
+import { managerApiFetch } from '@/api/manager-api'
 
-import type { DeviceBatteryStore } from '@/store/device-battery-store'
-import type { DeviceNetworkStore } from '@/store/device-network-store'
-import type { DeviceGpsStore } from '@/store/device-gps-store'
-import type { DeviceLightStore } from '@/store/device-light-store'
-import type { DevicePoseStore } from '@/store/device-pose-store'
-import type { DeviceBluetoothStore } from '@/store/device-bluetooth-store'
-import type { DeviceProxyStore } from '@/store/device-proxy-store'
-import type { DevicePhonenumberStore } from '@/store/device-phonenumber-store'
+import type { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import type { DeviceScenariosStore, ScenarioResource } from '@/store/device-scenarios-store'
 
 // ===================== Parameter catalog =====================
-// The constructor is a CONDUCTOR: applying a scenario only calls the existing
-// per-operblock store methods (the same set-then-apply pairs the built-in presets
-// use) — no new device-facing logic lives here. Launch-time parameters (operator
-// MCC/MNC, serialno, wifi_mac, initial_location) are deliberately NOT in the
-// catalog: they cannot be changed at runtime.
+// A constructor scenario is a list of runtime params. Applying is done ENTIRELY on the
+// backend (domain/scenario-apply.js), so this front-end store only authors/persists the
+// definitions (over the /api/scenarios HTTP API) and triggers apply — it no longer drives
+// operblock stores. Launch-time parameters (operator MCC/MNC, serialno, wifi_mac,
+// initial_location) are deliberately NOT in the catalog: they cannot be changed at runtime.
 
 export type ParamType =
   | 'battery.level' | 'battery.charging'
@@ -58,10 +52,10 @@ export interface ParamDef {
   /** Resources this param writes — drives intra-scenario conflict detection (C). */
   resources: ScenarioResource[]
   /**
-   * Resources the custom scenario must CLAIM in the shared resource model when it
-   * applies this param. Empty for params applied via DeviceScenariosStore toggles
-   * (temperature/weather): those claim ownership themselves (ambient:temperature /
-   * ambient:weather), and a duplicate custom claim would be preempted by them.
+   * Resources the active custom scenario CLAIMS in the shared resource model (green
+   * highlight + newest-wins preemption vs ambients/presets/other customs). Applying is
+   * on the backend now, so this is pure front-end bookkeeping; it mirrors `resources`
+   * for every param that owns a device resource.
    */
   claimResources: ScenarioResource[]
   options?: Array<{ value: string; label: string }>
@@ -72,7 +66,8 @@ export interface ParamDef {
   hint?: string
 }
 
-// Pose presets mirror pose-section.tsx (pitch, yaw, roll).
+// Pose presets mirror pose-section.tsx (pitch, yaw, roll). The name->angles resolution
+// also lives in the backend (domain/scenario-apply.js POSE_PRESETS).
 export const POSE_PRESETS: Record<string, { label: string; pitch: number; yaw: number; roll: number }> = {
   flat: { label: 'Flat', pitch: 0, yaw: 0, roll: 0 },
   rightTilt: { label: 'Right tilt', pitch: 0, yaw: 0, roll: 90 },
@@ -127,12 +122,12 @@ export const PARAM_DEFS: ParamDef[] = [
   {
     type: 'temperature.value', label: 'Temperature', group: 'Sensors', control: 'number',
     defaultValue: 25, min: -20, max: 45, unit: '°C',
-    resources: ['temperature'], claimResources: [],
+    resources: ['temperature'], claimResources: ['temperature'],
   },
   {
     type: 'weather.on', label: 'Weather from location', group: 'Sensors', control: 'toggle',
-    defaultValue: true, resources: ['temperature', 'humidity', 'pressure'], claimResources: [],
-    hint: 'Needs a device location (add "GPS location" or apply one first).',
+    defaultValue: true, resources: ['temperature', 'humidity', 'pressure'], claimResources: ['temperature', 'humidity', 'pressure'],
+    hint: 'Needs "GPS location" in the same scenario.',
   },
   {
     type: 'light.lux', label: 'Light', group: 'Sensors', control: 'number',
@@ -164,6 +159,7 @@ export const PARAM_DEFS: ParamDef[] = [
   {
     type: 'bssid.on', label: 'Sync Wi-Fi with location (BSSID)', group: 'Connectivity', control: 'toggle',
     defaultValue: true, resources: [], claimResources: [],
+    hint: 'Needs "GPS location" in the same scenario.',
   },
 ]
 
@@ -182,6 +178,10 @@ export function conflictingWith(type: ParamType, present: ParamType[]): ParamTyp
   })
 }
 
+// Params that need a location on the backend to apply (weather/bssid read the just-set
+// GPS). A scenario using them MUST also carry gps.location — the daemon can't derive one.
+const LOCATION_DEPENDENT: ParamType[] = ['weather.on', 'bssid.on']
+
 // Soft logical warnings (collision B) — advisory only, never blocking.
 export function scenarioWarnings(params: ScenarioParam[]): string[] {
   const warnings: string[] = []
@@ -189,15 +189,10 @@ export function scenarioWarnings(params: ScenarioParam[]): string[] {
   if (byType.get('network.airplane') === true && byType.get('network.wifi') === true) {
     warnings.push('Airplane mode ON contradicts Wi-Fi ON — the device will apply both, but Wi-Fi is normally off in airplane mode.')
   }
-  if (byType.get('weather.on') === true && !byType.has('gps.location')) {
-    warnings.push('Weather from location needs a device location — add "GPS location" to this scenario or apply one before running it.')
-  }
   return warnings
 }
 
-// ===================== Persistence =====================
-
-const STORAGE_KEY = 'orchid.constructor.scenarios.v1'
+// ===================== Persistence helpers =====================
 
 function genId(): string {
   try {
@@ -206,9 +201,8 @@ function genId(): string {
   return `sc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-// Value validation shared by save-time checks AND localStorage sanitization —
-// module-level so sanitize() can shape-check values before they ever reach the UI
-// or the apply path (a malformed blob must not throw in either).
+// Value validation shared by save-time checks AND load sanitization — a malformed blob
+// (hand-edited file / older schema) must never throw in the UI.
 export function validateParamValue(def: ParamDef, value: ParamValue): string | null {
   switch (def.control) {
     case 'slider':
@@ -247,8 +241,7 @@ export function validateParamValue(def: ParamDef, value: ParamValue): string | n
   }
 }
 
-// Keep only well-formed entries so a corrupt/stale blob can't crash the panel or
-// poison an apply run: unknown param types AND shape-invalid values are dropped.
+// Keep only well-formed entries so a stale/hand-edited file can't crash the panel.
 function sanitize(raw: unknown): CustomScenario[] {
   if (!Array.isArray(raw)) return []
   const out: CustomScenario[] = []
@@ -266,81 +259,92 @@ function sanitize(raw: unknown): CustomScenario[] {
   return out
 }
 
-const STEP_DELAY_MS = 150
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 // ===================== Store =====================
 
 /**
- * User-built ("Constructor") scenarios: persisted definitions + the conductor that
- * applies one by calling the existing operblock store methods, exactly like the
- * built-in presets do (set-then-apply through the per-device singleton stores).
+ * User-built ("Constructor") scenarios. Definitions are PER-DEVICE, persisted on the
+ * manager's backend file store (/backups/scenarios.json) over the /api/scenarios HTTP
+ * API — so they survive a page reload AND a manager restart, and the Type-2 schedule
+ * daemon reads the same file. This store owns the CRUD (list/save/rename/remove) and
+ * triggers apply; the actual device apply runs entirely on the backend
+ * (domain/scenario-apply.js), the single apply path for both instant and scheduled use.
  *
- * Coordination: before applying, the scenario claims the union of its params'
- * claimResources in DeviceScenariosStore (same generic newest-wins preemption as
- * ambients/presets — conflicting owners stop first, e.g. the day/night cycle yields
- * `light`). Params applied via DeviceScenariosStore toggles (temperature/weather)
- * claim their own ownership inside those toggles. The built-in `Reset` preset clears
- * active custom scenarios along with everything else.
- *
- * Definitions live in localStorage (device-independent); the ACTIVE state is
- * per-device, in DeviceScenariosStore.activeCustom.
+ * Coordination: applying a scenario still marks it active in DeviceScenariosStore
+ * (activeCustom) so it owns its resources in the shared resource model — green highlight,
+ * newest-wins preemption vs ambients/presets/other customs, and the built-in Reset clears
+ * it. Device-level sensor coordination (noise yielding) is handled inside scenario-apply.
  */
 @injectable()
 @deviceConnectionRequired()
 export class DeviceConstructorStore {
   scenarios: CustomScenario[] = []
   busyId: string | null = null
+  loading = false
   errorMessage: string | null = null
   statusMessage: string | null = null
 
   constructor(
-    @inject(CONTAINER_IDS.deviceBatteryStore) private battery: DeviceBatteryStore,
-    @inject(CONTAINER_IDS.deviceNetworkStore) private network: DeviceNetworkStore,
-    @inject(CONTAINER_IDS.deviceGpsStore) private gps: DeviceGpsStore,
-    @inject(CONTAINER_IDS.deviceLightStore) private light: DeviceLightStore,
-    @inject(CONTAINER_IDS.devicePoseStore) private pose: DevicePoseStore,
-    @inject(CONTAINER_IDS.deviceBluetoothStore) private bluetooth: DeviceBluetoothStore,
-    @inject(CONTAINER_IDS.deviceProxyStore) private proxy: DeviceProxyStore,
-    @inject(CONTAINER_IDS.devicePhonenumberStore) private phone: DevicePhonenumberStore,
+    @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore,
     @inject(CONTAINER_IDS.deviceScenariosStore) private scenariosStore: DeviceScenariosStore
   ) {
     makeAutoObservable(this)
-    this.load()
-    // Definitions are global (one localStorage key for all tabs/devices): re-load on
-    // cross-tab writes so a stale tab can't silently clobber another tab's scenarios.
-    window.addEventListener('storage', this.onStorage)
+    void this.load()
   }
 
-  // Remove the cross-tab listener. Called by the control panel on unmount / device
-  // change (alongside DeviceScenariosStore.dispose()) so the per-device singleton
-  // isn't kept alive by the window listener.
-  dispose(): void {
-    window.removeEventListener('storage', this.onStorage)
+  // No listeners/timers to tear down (definitions are backend-owned). Kept so the panel
+  // can call it uniformly alongside DeviceScenariosStore.dispose().
+  dispose(): void { /* no-op */ }
+
+  private async resolveSerial(): Promise<string> {
+    const device = await this.deviceBySerialStore.fetch()
+    if (!device?.serial) throw new Error('device serial not available')
+    return device.serial
   }
 
-  private onStorage = (e: StorageEvent): void => {
-    if (e.key === STORAGE_KEY || e.key === null) this.load()
+  private scenariosUrl(serial: string): string {
+    return `/manager-api/scenarios/${encodeURIComponent(serial)}`
   }
 
-  // ----- persistence -----
+  // ----- persistence (backend file store) -----
 
-  private load(): void {
+  private async load(): Promise<void> {
+    runInAction(() => { this.loading = true })
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY)
-      this.scenarios = raw ? sanitize(JSON.parse(raw)) : []
+      const serial = await this.resolveSerial()
+      const res = await managerApiFetch(this.scenariosUrl(serial))
+      const data = await res.json().catch(() => null)
+      if (res.ok && data?.ok && Array.isArray(data.scenarios)) {
+        runInAction(() => { this.scenarios = sanitize(data.scenarios) })
+      }
     } catch {
-      this.scenarios = []
+      /* device offline / not booted — keep whatever we have, retry on next reload() */
+    } finally {
+      runInAction(() => { this.loading = false })
     }
   }
 
-  private persist(): void {
+  /** Re-fetch the saved set from the backend (e.g. after switching devices). */
+  reload(): Promise<void> {
+    return this.load()
+  }
+
+  // Push the whole set to the backend (PUT-style replace via POST). Optimistic: the
+  // local array is already updated; a failure surfaces in errorMessage.
+  private async persist(): Promise<void> {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.scenarios))
-    } catch { /* storage full/blocked — definitions stay in memory */ }
+      const serial = await this.resolveSerial()
+      const res = await managerApiFetch(this.scenariosUrl(serial), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.scenarios),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.ok) {
+        runInAction(() => { this.errorMessage = data?.error || `Save failed (HTTP ${res.status})` })
+      }
+    } catch (e) {
+      runInAction(() => { this.errorMessage = e instanceof Error ? e.message : 'Save failed (device offline?)' })
+    }
   }
 
   // ----- validation -----
@@ -370,6 +374,14 @@ export class DeviceConstructorStore {
         if (!errors.includes(msg) && p.type < other) errors.push(msg)
       }
     }
+
+    // Location requirement: weather/bssid can only apply against a location, and the
+    // backend apply / daemon can't derive one — the scenario must carry gps.location.
+    const types = params.map((p) => p.type)
+    if (LOCATION_DEPENDENT.some((t) => types.includes(t)) && !types.includes('gps.location')) {
+      const which = LOCATION_DEPENDENT.filter((t) => types.includes(t)).map((t) => PARAM_DEF_MAP.get(t)!.label).join(' / ')
+      errors.push(`Add "GPS location" — ${which} need a location to apply`)
+    }
     return errors
   }
 
@@ -377,7 +389,7 @@ export class DeviceConstructorStore {
     return validateParamValue(def, value)
   }
 
-  // ----- CRUD -----
+  // ----- CRUD (mutate local + persist whole set) -----
 
   /** Create (no id) or overwrite (id given). Returns the id, or null if invalid. */
   save(name: string, params: ScenarioParam[], id?: string): string | null {
@@ -392,13 +404,13 @@ export class DeviceConstructorStore {
         // The stored definition changed, so any active claim now describes a scenario
         // that was never applied — drop it; the edited scenario must be re-applied.
         this.scenariosStore.releaseCustomScenario(id)
-        this.persist()
+        void this.persist()
         return id
       }
     }
     const newId = genId()
     this.scenarios.push({ id: newId, name: trimmed, params: copy })
-    this.persist()
+    void this.persist()
     return newId
   }
 
@@ -406,17 +418,15 @@ export class DeviceConstructorStore {
     const s = this.scenarios.find((x) => x.id === id)
     if (!s || !name.trim()) return
     s.name = name.trim()
-    this.persist()
+    void this.persist()
   }
 
   remove(id: string): void {
-    // Never yank a scenario out from under its own in-flight apply: releasing the
-    // claim mid-run would let sensor noise re-take the very sensors the remaining
-    // steps are setting.
+    // Never yank a scenario out from under its own in-flight apply.
     if (this.busyId === id) return
     this.scenarios = this.scenarios.filter((s) => s.id !== id)
     this.scenariosStore.releaseCustomScenario(id)
-    this.persist()
+    void this.persist()
   }
 
   // ----- active state (delegated to the shared resource model) -----
@@ -434,14 +444,13 @@ export class DeviceConstructorStore {
     return this.statusMessage
   }
 
-  // ----- apply (the conductor) -----
+  // ----- apply (delegated to the backend; single apply path) -----
 
   /**
-   * Apply a saved scenario: claim its resources (newest-wins preemption stops
-   * conflicting ambients/presets/customs first), then call each param's existing
-   * store methods grouped per store, in a stable order, with the same inter-step
-   * delay the built-in presets use. Leaf stores never throw — failures are read
-   * back from their errorMessage and reported per-param.
+   * Apply a saved scenario: claim its resources in the front-end model (green highlight
+   * + preemption), then POST to the backend which drives the domain functions. Reports
+   * the backend's per-param outcome. On a hard failure (couldn't reach the backend) the
+   * claim is released so a never-applied scenario isn't left highlighted.
    */
   async applyScenario(id: string): Promise<void> {
     const scenario = this.scenarios.find((s) => s.id === id)
@@ -453,154 +462,49 @@ export class DeviceConstructorStore {
       this.statusMessage = null
     })
 
-    // Only claim-carrying scenarios get an "active" entry: a claim-empty scenario
-    // (only instant one-shot writes and/or params whose toggles own resources
-    // themselves) has nothing to hold, so marking it active would leave a green
-    // highlight nothing can ever preempt (like `reset`, it applies and finishes).
+    // Front-end bookkeeping only: mark the scenario the active owner of its resources
+    // (highlight + newest-wins preemption). Claim-empty scenarios (e.g. only network/
+    // phone) apply and finish without a lasting highlight, like the built-in Reset.
     const claim = [...new Set(scenario.params.flatMap((p) => PARAM_DEF_MAP.get(p.type)?.claimResources ?? []))]
-    if (claim.length > 0) {
-      this.scenariosStore.claimCustomScenario(id, claim)
-    } else {
-      this.scenariosStore.releaseCustomScenario(id) // stale claim from an older definition
-    }
-
-    const byType = new Map(scenario.params.map((p) => [p.type, p.value]))
-    const failures: string[] = []
-    const steps: Array<() => Promise<void>> = []
-
-    // --- Network (one apply carries all five fields) ---
-    const networkTypes: ParamType[] = ['network.signal', 'network.speed', 'network.registration', 'network.wifi', 'network.airplane']
-    if (networkTypes.some((t) => byType.has(t))) {
-      steps.push(async () => {
-        if (byType.has('network.signal')) this.network.setSignalStrong(byType.get('network.signal') === 'strong')
-        if (byType.has('network.speed')) this.network.setNetworkType(byType.get('network.speed') as string)
-        if (byType.has('network.registration')) this.network.setRegistration(byType.get('network.registration') as string)
-        if (byType.has('network.wifi')) this.network.setWifi(byType.get('network.wifi') === true)
-        if (byType.has('network.airplane')) this.network.setAirplane(byType.get('network.airplane') === true)
-        await this.network.apply()
-        if (this.network.errorMessage) failures.push(`Network: ${this.network.errorMessage}`)
-      })
-    }
-
-    // --- Battery (one apply carries level + charging) ---
-    if (byType.has('battery.level') || byType.has('battery.charging')) {
-      steps.push(async () => {
-        if (byType.has('battery.level')) this.battery.setLevel(byType.get('battery.level') as number)
-        if (byType.has('battery.charging')) this.battery.setCharging(byType.get('battery.charging') === true)
-        await this.battery.apply()
-        if (this.battery.errorMessage) failures.push(`Battery: ${this.battery.errorMessage}`)
-      })
-    }
-
-    // --- GPS (before weather/BSSID toggles: they read the applied location) ---
-    if (byType.has('gps.location')) {
-      steps.push(async () => {
-        const coords = byType.get('gps.location') as { lat: string; lon: string }
-        this.gps.setLatitude(coords.lat)
-        this.gps.setLongitude(coords.lon)
-        await this.gps.apply()
-        if (this.gps.errorMessage) failures.push(`GPS: ${this.gps.errorMessage}`)
-      })
-    }
-
-    // --- Proxy ---
-    if (byType.has('proxy.config')) {
-      steps.push(async () => {
-        const cfg = byType.get('proxy.config') as { host: string; port: string }
-        this.proxy.setHost(cfg.host)
-        this.proxy.setPort(cfg.port)
-        await this.proxy.apply()
-        if (this.proxy.errorMessage) failures.push(`Proxy: ${this.proxy.errorMessage}`)
-      })
-    }
-
-    // --- Phone number ---
-    if (byType.has('phone.number')) {
-      steps.push(async () => {
-        this.phone.setNumber(byType.get('phone.number') as string)
-        await this.phone.apply()
-        if (this.phone.errorMessage) failures.push(`Phone: ${this.phone.errorMessage}`)
-      })
-    }
-
-    // --- Bluetooth (setEnabled applies itself) ---
-    if (byType.has('bluetooth.on')) {
-      steps.push(async () => {
-        await this.bluetooth.setEnabled(byType.get('bluetooth.on') === true)
-        if (this.bluetooth.errorMessage) failures.push(`Bluetooth: ${this.bluetooth.errorMessage}`)
-      })
-    }
-
-    // --- Light (set-then-apply, like the presets) ---
-    if (byType.has('light.lux')) {
-      steps.push(async () => {
-        this.light.applyPreset(byType.get('light.lux') as number)
-        await this.light.apply()
-        if (this.light.errorMessage) failures.push(`Light: ${this.light.errorMessage}`)
-      })
-    }
-
-    // --- Pose (set-then-apply) ---
-    if (byType.has('pose.preset')) {
-      steps.push(async () => {
-        const preset = POSE_PRESETS[byType.get('pose.preset') as string]
-        if (!preset) { failures.push('Pose: unknown preset'); return }
-        this.pose.applyPreset(preset.pitch, preset.yaw, preset.roll)
-        await this.pose.apply()
-        if (this.pose.errorMessage) failures.push(`Pose: ${this.pose.errorMessage}`)
-      })
-    }
-
-    // --- Temperature (via the scenarios-store operblock: it claims `temperature`
-    //     itself; the awaitable path lets us read the REAL apply outcome) ---
-    if (byType.has('temperature.value')) {
-      steps.push(async () => {
-        // Read THIS apply's own outcome (returned), not the shared temperatureError
-        // observable — the shared field could reflect a later apply if the user pokes
-        // the Temperature operblock mid-scenario.
-        const tempError = await this.scenariosStore.applyTemperatureValue(byType.get('temperature.value') as number)
-        if (tempError) failures.push(`Temperature: ${tempError}`)
-      })
-    }
-
-    // --- Ambient toggles (own their resources themselves). Only toggle on a REAL
-    //     transition: e.g. toggleWeather(false) when weather is already off would
-    //     still fire releaseWeather()'s neutralize-write (25°C) into a temperature
-    //     resource another operblock may own right now. ---
-    if (byType.has('weather.on')) {
-      steps.push(async () => {
-        const want = byType.get('weather.on') === true
-        if (want !== this.scenariosStore.weatherOn) this.scenariosStore.toggleWeather(want)
-      })
-    }
-    if (byType.has('bssid.on')) {
-      steps.push(async () => {
-        const want = byType.get('bssid.on') === true
-        if (want !== this.scenariosStore.bssidSyncOn) this.scenariosStore.toggleBssidSync(want)
-      })
-    }
-    if (byType.has('sensors.noise')) {
-      steps.push(async () => {
-        const want = byType.get('sensors.noise') === true
-        if (want !== this.scenariosStore.sensorNoiseOn) this.scenariosStore.toggleSensorNoise(want)
-      })
-    }
+    if (claim.length > 0) this.scenariosStore.claimCustomScenario(id, claim)
+    else this.scenariosStore.releaseCustomScenario(id)
 
     try {
-      for (let i = 0; i < steps.length; i++) {
-        if (i > 0) await sleep(STEP_DELAY_MS)
-        await steps[i]()
-      }
+      const serial = await this.resolveSerial()
+      const res = await managerApiFetch(`${this.scenariosUrl(serial)}/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenarioId: id }),
+      })
+      const data = await res.json().catch(() => null)
+      const failures: Array<{ type: string; error: string }> = Array.isArray(data?.failures) ? data.failures : []
+      const appliedCount = Array.isArray(data?.applied) ? data.applied.length : 0
+
       runInAction(() => {
-        if (failures.length > 0) {
-          this.errorMessage = failures.join(' · ')
-        } else {
+        if (res.ok && data?.ok) {
           this.statusMessage = `Applied "${scenario.name}" (${scenario.params.length} param${scenario.params.length === 1 ? '' : 's'})`
+        } else if (res.ok && appliedCount > 0) {
+          // Partial apply: at least one param reached the device — keep the claim, report the rest.
+          this.errorMessage = failures.map((f) => `${f.type}: ${f.error}`).join(' · ')
+        } else {
+          // Nothing applied (all failed, or a hard error): release the claim so a
+          // never-applied scenario isn't left highlighted after preemption.
+          this.errorMessage = failures.length > 0
+            ? failures.map((f) => `${f.type}: ${f.error}`).join(' · ')
+            : (data?.error || `Apply failed (HTTP ${res.status})`)
+          this.scenariosStore.releaseCustomScenario(id)
+        }
+        // Keep the "Realistic sensors" toggle in sync with what a scenario carrying
+        // sensors.noise just set on the backend (only when something applied).
+        if (appliedCount > 0 || (res.ok && data?.ok)) {
+          const noise = scenario.params.find((p) => p.type === 'sensors.noise')
+          if (noise) this.scenariosStore.reflectSensorNoise(noise.value === true)
         }
       })
     } catch (error) {
       runInAction(() => {
         this.errorMessage = error instanceof Error ? error.message : 'Apply failed'
+        this.scenariosStore.releaseCustomScenario(id)
       })
     } finally {
       runInAction(() => { this.busyId = null })
