@@ -49,6 +49,7 @@ import { DevicePhonenumberStore } from '@/store/device-phonenumber-store'
 import { DeviceBluetoothStore } from '@/store/device-bluetooth-store'
 import { DeviceBleBeaconStore } from '@/store/device-ble-beacon-store'
 import type { DeviceBackupStore } from '@/store/device-backup-store'
+import type { DeviceConstructorStore } from '@/store/device-constructor-store'
 
 export const CONTAINER_IDS = {
   groupId: Symbol.for('groupId') as interfaces.ServiceIdentifier<string>,
@@ -101,6 +102,7 @@ export const CONTAINER_IDS = {
   deviceBluetoothStore: Symbol.for('DeviceBluetoothStore') as interfaces.ServiceIdentifier<DeviceBluetoothStore>,
   deviceBleBeaconStore: Symbol.for('DeviceBleBeaconStore') as interfaces.ServiceIdentifier<DeviceBleBeaconStore>,
     deviceBackupStore: Symbol.for('DeviceBackupStore') as interfaces.ServiceIdentifier<DeviceBackupStore>,
+    deviceConstructorStore: Symbol.for('DeviceConstructorStore') as interfaces.ServiceIdentifier<DeviceConstructorStore>,
   factoryTransactionService: Symbol.for(
     'Factory<TransactionService>'
   ) as interfaces.ServiceIdentifier<TransactionFactory>,

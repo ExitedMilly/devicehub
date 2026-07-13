@@ -105,9 +105,10 @@ const NOISE_RESOURCES: ScenarioResource[] = ['light', 'pose', 'temperature', 'hu
 
 type AmbientId = 'dayNight' | 'rotation' | 'drain' | 'temperature' | 'weather'
 
-// Stable key for any active resource owner — an ambient scenario or a preset.
-// Lets preemption treat both kinds uniformly (no per-pair logic).
-type OwnerKey = `ambient:${AmbientId}` | `preset:${ScenarioPreset}`
+// Stable key for any active resource owner — an ambient scenario, a preset, or a
+// user-built custom scenario (Constructor tab). Lets preemption treat all kinds
+// uniformly (no per-pair logic).
+type OwnerKey = `ambient:${AmbientId}` | `preset:${ScenarioPreset}` | `custom:${string}`
 
 // Owned resources per ambient scenario (drives generic preemption).
 const AMBIENT_META: Record<AmbientId, { resources: ScenarioResource[] }> = {
@@ -160,6 +161,10 @@ export class DeviceScenariosStore {
   // Presets currently "active" (own their resources). Several may coexist while
   // their resources are disjoint. `reset` is never added here.
   activePresets = new Set<ScenarioPreset>()
+  // User-built custom scenarios (Constructor tab) currently active, id → the
+  // resources they own. Enters the same generic newest-wins preemption as
+  // ambients/presets; applied by DeviceConstructorStore via claimCustomScenario().
+  activeCustom = new Map<string, ScenarioResource[]>()
   errorMessage: string | null = null
   statusMessage: string | null = null
 
@@ -319,6 +324,21 @@ export class DeviceScenariosStore {
     await this.applyReporting()
   }
 
+  // Awaitable set+enable+apply for programmatic callers (custom scenarios). Same
+  // semantics as setTemperatureValue + toggleTemperature(true), but it RETURNS this
+  // apply's own outcome (error string, or null on success) rather than making the
+  // caller read the shared temperatureError observable — that shared read could
+  // reflect a later apply if the user pokes the operblock mid-scenario.
+  async applyTemperatureValue(value: number): Promise<string | null> {
+    this.setTemperatureValue(value)
+    if (!this.temperatureOn) {
+      this.preemptConflicting(AMBIENT_META.temperature.resources, 'ambient:temperature')
+      runInAction(() => { this.temperatureOn = true })
+      return this.enableTemperature()
+    }
+    return this.applyReporting()
+  }
+
   toggleTemperature(on: boolean): void {
     if (on) {
       // Newest-wins (uniform with every owner), then claim `temperature`.
@@ -338,18 +358,35 @@ export class DeviceScenariosStore {
   // Turning the operblock on applies the current value immediately. Order matters:
   // make noise yield the temperature sensor FIRST (so a noise tick can't overwrite our
   // set), THEN apply. Continuous operblocks self-heal; temperature is set-and-hold.
-  private async enableTemperature(): Promise<void> {
+  private async enableTemperature(): Promise<string | null> {
     if (this.sensorNoiseOn) await this.pushSensorNoise()
-    await this.applyReporting()
+    return this.applyReporting()
   }
 
   // Push this.temperatureC and reflect the outcome in the popover (applying / applied /
   // failed). Used by both the Apply button and by enabling the operblock.
-  private async applyReporting(): Promise<void> {
-    // Serialize applies (Apply button is disabled while applying, but the Enter key
-    // and a quick toggle-off/on would otherwise overlap two POSTs with no ordering).
-    if (this.temperatureApplying) return
+  // Serialize temperature applies into a chain. Observable-by-ref (like the timer
+  // fields) is harmless — it's only ever read/written inside applyReporting, never
+  // in a reactive context.
+  private applyChain: Promise<void> = Promise.resolve()
+
+  private applyReporting(): Promise<string | null> {
+    // Serialize applies. The old guard `if (temperatureApplying) return` DROPPED an
+    // overlapping apply — harmless for a double-click, but a programmatic scenario
+    // conductor awaiting it would then never POST its value AND would read a stale
+    // outcome (false success). Chain instead: each apply runs after the previous one,
+    // in order, so nothing is dropped and the awaited promise reflects THIS apply.
+    // Snapshot the value at REQUEST time so a later setTemperatureValue can't make a
+    // queued apply post a superseded value; the promise resolves to this apply's own
+    // outcome (null ok / error string).
     const celsius = this.temperatureC
+    const run = this.applyChain.then(() => this.runTemperatureApply(celsius))
+    // A rejection must not poison the chain (runTemperatureApply already swallows).
+    this.applyChain = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  private async runTemperatureApply(celsius: number): Promise<string | null> {
     runInAction(() => {
       this.temperatureApplying = true
       this.temperatureStatus = null
@@ -360,8 +397,10 @@ export class DeviceScenariosStore {
       // Only report if the operblock is still on — if it was toggled off mid-apply,
       // a stale "Applied N°C" next to an off switch would be misleading.
       runInAction(() => { if (this.temperatureOn) this.temperatureStatus = `Applied ${celsius}°C` })
+      return null
     } catch {
       runInAction(() => { if (this.temperatureOn) this.temperatureError = 'Apply failed — device busy' })
+      return 'Apply failed — device busy'
     } finally {
       runInAction(() => { this.temperatureApplying = false })
     }
@@ -706,6 +745,29 @@ export class DeviceScenariosStore {
     return this.activePresets.has(name)
   }
 
+  // ----- Custom scenarios (Constructor tab) as resource owners -----
+  // A custom scenario claims the union of its params' resources before applying,
+  // exactly like a preset: conflicting ambients/presets/customs are preempted
+  // (newest wins), then the scenario is marked active (drives its green highlight).
+  // Sensor noise automatically yields the claimed NOISE_RESOURCES via the
+  // noiseOwnedKey reaction — no extra wiring.
+  claimCustomScenario(id: string, resources: ScenarioResource[]): void {
+    this.preemptConflicting(resources, `custom:${id}`)
+    this.activeCustom.set(id, [...resources])
+  }
+
+  releaseCustomScenario(id: string): void {
+    this.activeCustom.delete(id)
+  }
+
+  isCustomScenarioActive(id: string): boolean {
+    return this.activeCustom.has(id)
+  }
+
+  get hasActiveCustomScenarios(): boolean {
+    return this.activeCustom.size > 0
+  }
+
   // Unified view of every active resource owner — ambient scenarios AND active
   // presets — each with its resources + a deactivate() action. This uniformity
   // is what keeps preemption pair-agnostic.
@@ -716,6 +778,11 @@ export class DeviceScenariosStore {
     }
     for (const name of this.activePresets) {
       owners.push({ key: `preset:${name}`, resources: this.resourcesOf(name), deactivate: () => { this.activePresets.delete(name) } })
+    }
+    for (const [id, resources] of this.activeCustom) {
+      // Like presets, deactivation just drops the active flag (no device write —
+      // the new owner is about to take the resource over).
+      owners.push({ key: `custom:${id}`, resources, deactivate: () => { this.activeCustom.delete(id) } })
     }
     return owners
   }
@@ -777,6 +844,7 @@ export class DeviceScenariosStore {
       // active preset, then run the neutral steps. Reset itself never stays active.
       for (const a of [...this.activeAmbients]) this.stopAmbientById(a.id)
       this.activePresets.clear()
+      this.activeCustom.clear()
       void this.runSteps(name, this.buildPresetSteps(name))
       return
     }
@@ -1052,6 +1120,7 @@ export class DeviceScenariosStore {
       this.bssidFetching = false
       this.bssidPending = false
       this.activePresets.clear()
+      this.activeCustom.clear()
     })
   }
 }

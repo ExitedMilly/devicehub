@@ -1,0 +1,132 @@
+/* Constructor tab: scenario builder + saved list. Two tinted cards stacked in one
+   column, same rhythm as the Controls tab. All colours are VKUI tokens. */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.card {
+  padding: 12px;
+}
+
+.cardTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--vkui--color_text_primary);
+  margin-bottom: 12px;
+}
+
+.pickerRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+/* One added parameter: label + value control on the left, remove on the right. */
+.paramRow {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vkui--color_separator_primary);
+}
+
+.paramMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.paramLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vkui--color_text_secondary);
+}
+
+.paramHint {
+  font-size: 11px;
+  color: var(--vkui--color_text_secondary);
+}
+
+.sliderRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.sliderRow > :first-child {
+  flex: 1 1 auto;
+}
+
+.sliderValue {
+  flex: 0 0 auto;
+  min-width: 44px;
+  text-align: right;
+  font-size: 13px;
+  color: var(--vkui--color_text_primary);
+}
+
+.pairRow {
+  display: flex;
+  gap: 6px;
+}
+
+.warning {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--vkui--color_text_secondary);
+}
+
+/* Saved list rows */
+.listRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--vkui--color_separator_primary);
+}
+
+.listRow:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.listMain {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.listName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vkui--color_text_primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.listSummary {
+  font-size: 12px;
+  color: var(--vkui--color_text_secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activeDot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vkui--color_icon_positive);
+  box-shadow: 0 0 0 3px var(--vkui--color_background_positive_tint);
+}

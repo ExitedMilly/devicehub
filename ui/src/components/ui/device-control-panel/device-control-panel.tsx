@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { useInjection } from 'inversify-react'
-import { Panel, Placeholder, Tabs, TabsItem, View } from '@vkontakte/vkui'
+import { Panel, Tabs, TabsItem, View } from '@vkontakte/vkui'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
@@ -18,6 +18,7 @@ import { PoseSection } from './sections/pose-section'
 import { ScenariosSection } from './sections/scenarios-section'
 import { BackupSection } from './sections/backup-section'
 import { DeviceButtonsSection } from './sections/device-buttons-section'
+import { ConstructorTab } from './constructor-tab'
 
 import styles from './device-control-panel.module.css'
 
@@ -40,7 +41,11 @@ export const DeviceControlPanel = observer(() => {
   const [tab, setTab] = useState<Tab>('controls')
 
   const scenarios = useInjection(CONTAINER_IDS.deviceScenariosStore)
-  useEffect(() => () => scenarios.dispose(), [scenarios])
+  const constructorStore = useInjection(CONTAINER_IDS.deviceConstructorStore)
+  useEffect(() => () => {
+    scenarios.dispose()
+    constructorStore.dispose() // removes its cross-tab `storage` listener
+  }, [scenarios, constructorStore])
 
   return (
     <View activePanel='control'>
@@ -71,9 +76,7 @@ export const DeviceControlPanel = observer(() => {
             <DeviceButtonsSection />
           </div>
         ) : (
-          <Placeholder title='Constructor'>
-            Coming soon — build your own device state here.
-          </Placeholder>
+          <ConstructorTab />
         )}
       </Panel>
     </View>

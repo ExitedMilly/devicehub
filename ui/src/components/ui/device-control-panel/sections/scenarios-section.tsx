@@ -4,6 +4,7 @@ import { Switch } from '@vkontakte/vkui'
 import { Icon28MagicWandOutline } from '@vkontakte/icons'
 
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
+import { PARAM_DEF_MAP } from '@/store/device-constructor-store'
 
 import { PanelSection } from './panel-section'
 
@@ -28,9 +29,15 @@ const PRESET_ACTIVE: CSSProperties = {
 
 export const ScenariosSection = observer(() => {
   const scenarios = useInjection(CONTAINER_IDS.deviceScenariosStore)
+  const constructorStore = useInjection(CONTAINER_IDS.deviceConstructorStore)
+
+  // Any apply in flight (built-in preset OR custom scenario) disables both button
+  // groups — steps interleaving across two concurrent runs would race on the stores.
+  const busy = scenarios.busyPreset !== null || constructorStore.busyId !== null
 
   const active =
-    scenarios.activePresets.size > 0 || scenarios.cycleOn || scenarios.rotateOn || scenarios.batteryDrainEnabled
+    scenarios.activePresets.size > 0 || scenarios.hasActiveCustomScenarios ||
+    scenarios.cycleOn || scenarios.rotateOn || scenarios.batteryDrainEnabled
 
   return (
     <PanelSection active={active} icon={<Icon28MagicWandOutline />} title='Scenarios'>
@@ -44,7 +51,7 @@ export const ScenariosSection = observer(() => {
           <button
             key={p.value}
             className={styles.presetButton}
-            disabled={scenarios.busyPreset !== null}
+            disabled={busy}
             style={scenarios.isPresetActive(p.value) ? PRESET_ACTIVE : undefined}
             type='button'
             onClick={() => scenarios.applyPreset(p.value)}
@@ -57,6 +64,38 @@ export const ScenariosSection = observer(() => {
       {scenarios.statusText && (
         <div className={scenarios.errorMessage ? styles.error : styles.status}>
           {scenarios.statusText}
+        </div>
+      )}
+
+      {/* ============== My scenarios (user-built, Constructor tab) ============== */}
+
+      <hr className={styles.divider} />
+
+      <div className={styles.sectionTitle}>My scenarios</div>
+
+      {constructorStore.scenarios.length === 0 ? (
+        <div className={styles.status}>None yet — build one in the Constructor tab.</div>
+      ) : (
+        <div className={styles.presets}>
+          {constructorStore.scenarios.map((s) => (
+            <button
+              key={s.id}
+              className={styles.presetButton}
+              disabled={busy}
+              style={constructorStore.isActive(s.id) ? PRESET_ACTIVE : undefined}
+              title={s.params.map((p) => PARAM_DEF_MAP.get(p.type)?.label).filter(Boolean).join(' · ')}
+              type='button'
+              onClick={() => { void constructorStore.applyScenario(s.id) }}
+            >
+              {constructorStore.busyId === s.id ? 'Applying…' : s.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {constructorStore.statusText && (
+        <div className={constructorStore.errorMessage ? styles.error : styles.status}>
+          {constructorStore.statusText}
         </div>
       )}
 
