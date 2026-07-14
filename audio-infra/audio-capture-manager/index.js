@@ -5,6 +5,7 @@ const walkSimulator = require('./domain/walk-simulator');
 const poseScenario = require('./domain/pose-scenario');
 const wifiAutoconnect = require('./domain/wifi-autoconnect');
 const gpsInit = require('./domain/gps-init');
+const scheduler = require('./domain/scheduler');
 const backupLogical = require('./domain/backup-logical');
 
 const config = require('./config');
@@ -126,6 +127,11 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
         // shows it instead of the emulator's Googleplex default. Just a starting value
         // — the user can override it in the UI. No-op when INITIAL_LAT/LON are unset.
         gpsInit.start(INSTANCE_SERIAL, INITIAL_LAT, INITIAL_LON);
+
+        // Type-2 schedule daemon: applies saved scenarios at their scheduled time,
+        // autonomously (no browser). Re-reads /backups/schedule.json + scenarios.json
+        // every minute, so a restart self-heals. Fire-and-forget, scoped to this serial.
+        scheduler.start(INSTANCE_SERIAL);
     }
 });
 
@@ -143,6 +149,7 @@ function shutdown(signal) {
     }
     walkSimulator.shutdown();
     poseScenario.shutdown();
+    scheduler.stop();
     server.close(() => process.exit(0));
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

@@ -14,7 +14,7 @@ import {
 import controls from './sections/controls.module.css'
 import styles from './constructor-tab.module.css'
 
-import type { ParamDef, ParamType, ParamValue, ScenarioParam } from '@/store/device-constructor-store'
+import type { ParamDef, ParamType, ParamValue, ScenarioParam, ScheduleRepeat } from '@/store/device-constructor-store'
 
 // Numeric input that keeps the raw edit string locally and commits on blur/Enter —
 // per-keystroke Number() would make a leading '-' (negative temperatures are in
@@ -404,6 +404,112 @@ export const ConstructorTab = observer(() => {
               </button>
             </div>
           ))
+        )}
+      </Card>
+
+      {/* ================= Schedule (Type 2) ================= */}
+      <Card className={styles.card} mode='tint'>
+        <div className={styles.schedHeader}>
+          <div className={styles.cardTitle} style={{ marginBottom: 0 }}>Schedule</div>
+          <Switch
+            checked={constructorStore.scheduleActive}
+            onChange={(e) => constructorStore.setScheduleActive(e.target.checked)}
+          />
+        </div>
+
+        <div className={controls.hint}>
+          The manager applies scheduled scenarios automatically at their local time — even with
+          no browser open. A manual change overrides a scenario until its next scheduled run.
+        </div>
+
+        {constructorStore.scheduleActive && (
+          <div className={controls.status}>
+            {constructorStore.events.length === 0
+              ? 'On — no events yet.'
+              : constructorStore.nextEvent
+                ? `On · ${constructorStore.events.length} event(s) · next ≈ ${constructorStore.nextEvent.time} — ${constructorStore.nextEvent.name}`
+                : `On · ${constructorStore.events.length} event(s)`}
+          </div>
+        )}
+
+        {constructorStore.scheduleError && <div className={controls.error}>{constructorStore.scheduleError}</div>}
+
+        {constructorStore.events.map((ev) => (
+          <div className={styles.eventRow} key={ev.id}>
+            <div className={styles.eventGrid}>
+              <label className={styles.eventField}>
+                <span className={styles.eventLabel}>Time</span>
+                <input
+                  className={controls.input}
+                  type='time'
+                  value={ev.time}
+                  onChange={(e) => { if (e.target.value) constructorStore.updateEvent(ev.id, { time: e.target.value }) }}
+                />
+              </label>
+              <label className={styles.eventField}>
+                <span className={styles.eventLabel}>Scenario</span>
+                <select
+                  className={controls.input}
+                  value={ev.scenarioId}
+                  onChange={(e) => { if (e.target.value) constructorStore.updateEvent(ev.id, { scenarioId: e.target.value }) }}
+                >
+                  <option value=''>— choose —</option>
+                  {constructorStore.scenarios.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </label>
+              <label className={styles.eventField}>
+                <span className={styles.eventLabel}>Repeat</span>
+                <select
+                  className={controls.input}
+                  value={ev.repeat}
+                  onChange={(e) => constructorStore.updateEvent(ev.id, { repeat: e.target.value as ScheduleRepeat })}
+                >
+                  <option value='daily'>Daily</option>
+                  <option value='once'>Once</option>
+                </select>
+              </label>
+              <label className={styles.eventField}>
+                <span className={styles.eventLabel}>Jitter, min</span>
+                <input
+                  className={controls.input}
+                  type='number'
+                  min={0}
+                  value={ev.maxJitterMin}
+                  onChange={(e) => constructorStore.updateEvent(ev.id, { maxJitterMin: Math.max(0, Number(e.target.value) || 0) })}
+                />
+              </label>
+            </div>
+            <div className={styles.eventAside}>
+              <Switch checked={ev.enabled} onChange={(e) => constructorStore.updateEvent(ev.id, { enabled: e.target.checked })} />
+              <button
+                aria-label='Remove event'
+                className={controls.stopButton}
+                style={{ minWidth: 0, padding: '6px 12px' }}
+                title='Remove event'
+                type='button'
+                onClick={() => constructorStore.removeEvent(ev.id)}
+              >
+                ×
+              </button>
+            </div>
+            {ev.repeat === 'once' && constructorStore.eventFired(ev.id) && (
+              <div className={styles.eventDone}>✓ ran on {constructorStore.eventFired(ev.id)}</div>
+            )}
+          </div>
+        ))}
+
+        <div className={controls.actions}>
+          <button
+            className={controls.presetButton}
+            disabled={constructorStore.scenarios.length === 0}
+            type='button'
+            onClick={() => constructorStore.addEvent()}
+          >
+            Add event
+          </button>
+        </div>
+        {constructorStore.scenarios.length === 0 && (
+          <div className={controls.hint}>Save a scenario first — an event runs one of your saved scenarios.</div>
         )}
       </Card>
     </div>

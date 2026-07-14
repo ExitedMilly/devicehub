@@ -41,6 +41,19 @@ export interface CustomScenario {
   params: ScenarioParam[]
 }
 
+// ===================== Schedule (Type 2) =====================
+
+export type ScheduleRepeat = 'daily' | 'once'
+
+export interface ScheduleEvent {
+  id: string
+  time: string // "HH:MM" local (user tz), minute granularity
+  scenarioId: string
+  repeat: ScheduleRepeat
+  maxJitterMin: number
+  enabled: boolean
+}
+
 export type ParamControl = 'slider' | 'toggle' | 'select' | 'number' | 'text' | 'coords' | 'hostport'
 
 export interface ParamDef {
@@ -241,6 +254,26 @@ export function validateParamValue(def: ParamDef, value: ParamValue): string | n
   }
 }
 
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/
+
+function sanitizeEvent(raw: unknown): ScheduleEvent | null {
+  if (!raw || typeof raw !== 'object') return null
+  const e = raw as Partial<ScheduleEvent>
+  if (typeof e.id !== 'string' || !e.id) return null
+  if (typeof e.time !== 'string' || !TIME_RE.test(e.time)) return null
+  if (typeof e.scenarioId !== 'string') return null
+  let jitter = Number(e.maxJitterMin)
+  if (!Number.isFinite(jitter) || jitter < 0) jitter = 0
+  return {
+    id: e.id,
+    time: e.time,
+    scenarioId: e.scenarioId,
+    repeat: e.repeat === 'once' ? 'once' : 'daily',
+    maxJitterMin: Math.min(Math.floor(jitter), 720),
+    enabled: e.enabled !== false,
+  }
+}
+
 // Keep only well-formed entries so a stale/hand-edited file can't crash the panel.
 function sanitize(raw: unknown): CustomScenario[] {
   if (!Array.isArray(raw)) return []
@@ -283,12 +316,19 @@ export class DeviceConstructorStore {
   errorMessage: string | null = null
   statusMessage: string | null = null
 
+  // ----- Schedule (Type 2) -----
+  events: ScheduleEvent[] = []
+  scheduleActive = false
+  fired: Record<string, string> = {} // eventId -> 'YYYY-MM-DD' last fired (read-only from daemon)
+  scheduleError: string | null = null
+
   constructor(
     @inject(CONTAINER_IDS.deviceBySerialStore) private deviceBySerialStore: DeviceBySerialStore,
     @inject(CONTAINER_IDS.deviceScenariosStore) private scenariosStore: DeviceScenariosStore
   ) {
     makeAutoObservable(this)
     void this.load()
+    void this.loadSchedule()
   }
 
   // No listeners/timers to tear down (definitions are backend-owned). Kept so the panel
@@ -509,5 +549,112 @@ export class DeviceConstructorStore {
     } finally {
       runInAction(() => { this.busyId = null })
     }
+  }
+
+  // ===================== Schedule (Type 2) =====================
+
+  private scheduleUrl(serial: string): string {
+    return `/manager-api/schedule/${encodeURIComponent(serial)}`
+  }
+
+  private async loadSchedule(): Promise<void> {
+    try {
+      const serial = await this.resolveSerial()
+      const res = await managerApiFetch(this.scheduleUrl(serial))
+      const data = await res.json().catch(() => null)
+      if (res.ok && data?.ok) {
+        runInAction(() => {
+          this.events = Array.isArray(data.events)
+            ? data.events.map(sanitizeEvent).filter((e: ScheduleEvent | null): e is ScheduleEvent => e !== null)
+            : []
+          this.scheduleActive = data.scheduleActive === true
+          this.fired = (data.fired && typeof data.fired === 'object') ? data.fired : {}
+        })
+      }
+    } catch { /* offline — keep what we have */ }
+  }
+
+  reloadSchedule(): Promise<void> {
+    return this.loadSchedule()
+  }
+
+  // Persist the whole schedule. tzOffsetMin = minutes EAST of UTC for the user's browser
+  // (MSK = +180); the daemon computes "due" in this offset because the container is UTC.
+  private async persistSchedule(): Promise<void> {
+    try {
+      const serial = await this.resolveSerial()
+      const tzOffsetMin = -new Date().getTimezoneOffset()
+      const res = await managerApiFetch(this.scheduleUrl(serial), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: this.events, scheduleActive: this.scheduleActive, tzOffsetMin }),
+      })
+      const data = await res.json().catch(() => null)
+      runInAction(() => {
+        this.scheduleError = (!res.ok || !data?.ok) ? (data?.error || `Schedule save failed (HTTP ${res.status})`) : null
+      })
+    } catch (e) {
+      runInAction(() => { this.scheduleError = e instanceof Error ? e.message : 'Schedule save failed (device offline?)' })
+    }
+  }
+
+  setScheduleActive(on: boolean): void {
+    this.scheduleActive = on
+    void this.persistSchedule()
+  }
+
+  addEvent(): void {
+    const firstScenario = this.scenarios[0]
+    this.events.push({
+      id: genId(),
+      time: '09:00',
+      scenarioId: firstScenario ? firstScenario.id : '',
+      repeat: 'daily',
+      maxJitterMin: 0,
+      enabled: true,
+    })
+    void this.persistSchedule()
+  }
+
+  updateEvent(id: string, patch: Partial<ScheduleEvent>): void {
+    const e = this.events.find((x) => x.id === id)
+    if (!e) return
+    Object.assign(e, patch)
+    void this.persistSchedule()
+  }
+
+  removeEvent(id: string): void {
+    this.events = this.events.filter((e) => e.id !== id)
+    void this.persistSchedule()
+  }
+
+  /** 'YYYY-MM-DD' this event last fired (from the daemon), or null. */
+  eventFired(id: string): string | null {
+    return this.fired[id] ?? null
+  }
+
+  // Approximate next upcoming ENABLED event (base time, ignoring the daemon's small
+  // per-day jitter) for a status line. Uses the browser clock — the same tz the schedule
+  // is stored in.
+  get nextEvent(): { time: string; name: string } | null {
+    if (!this.scheduleActive) return null
+    const enabled = this.events.filter((e) =>
+      e.enabled &&
+      this.scenarios.some((s) => s.id === e.scenarioId) &&
+      !(e.repeat === 'once' && this.fired[e.id]) // a fired one-shot isn't "upcoming"
+    )
+    if (enabled.length === 0) return null
+    const now = new Date()
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    let best: ScheduleEvent | null = null
+    let bestDelta = Infinity
+    for (const e of enabled) {
+      const [h, m] = e.time.split(':').map(Number)
+      const delta = (((h * 60 + m) - nowMin) % 1440 + 1440) % 1440 || 1440 // 0 -> treat as next day
+      if (delta < bestDelta) { bestDelta = delta; best = e }
+    }
+    if (!best) return null
+    const scenario = this.scenarios.find((s) => s.id === best!.scenarioId)
+    return { time: best.time, name: scenario?.name ?? 'scenario' }
   }
 }

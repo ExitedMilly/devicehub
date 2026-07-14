@@ -130,3 +130,56 @@
   background: var(--vkui--color_icon_positive);
   box-shadow: 0 0 0 3px var(--vkui--color_background_positive_tint);
 }
+
+/* ---- Schedule section ---- */
+.schedHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.eventRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vkui--color_separator_primary);
+}
+
+.eventGrid {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.eventField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.eventLabel {
+  font-size: 11px;
+  color: var(--vkui--color_text_secondary);
+}
+
+.eventAside {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 4px;
+}
+
+.eventDone {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--vkui--color_text_positive);
+}
