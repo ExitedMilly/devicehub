@@ -31,21 +31,23 @@ type Tab = 'controls' | 'constructor'
  * uncontrolled Accordion, so all start collapsed and any number can be open at once
  * (multi-open). The whole panel scrolls vertically as one.
  *
- * dispose(): this panel owns DeviceScenariosStore.dispose() (moved here from the old
- * scenarios-button). The panel is mounted for the whole device session, so exactly one
- * dispose fires on device change / unmount — clearing every ambient timer/reaction. The
- * blocks that inject deviceScenariosStore (Temperature / Realistic sensors / Location /
- * Scenarios) never dispose it; the panel stays the sole owner.
+ * dispose(): this panel owns the teardown of the per-device stores it depends on,
+ * because it is mounted for the whole device session — so exactly one dispose fires on
+ * device change / unmount. It disposes DeviceScenariosStore (every ambient timer/reaction),
+ * DeviceConstructorStore (cross-tab storage listener), and DeviceGpsStore (the walk-polling
+ * interval). The blocks that inject these stores never dispose them; the panel is the sole owner.
  */
 export const DeviceControlPanel = observer(() => {
   const [tab, setTab] = useState<Tab>('controls')
 
   const scenarios = useInjection(CONTAINER_IDS.deviceScenariosStore)
   const constructorStore = useInjection(CONTAINER_IDS.deviceConstructorStore)
+  const gps = useInjection(CONTAINER_IDS.deviceGpsStore)
   useEffect(() => () => {
     scenarios.dispose()
     constructorStore.dispose() // removes its cross-tab `storage` listener
-  }, [scenarios, constructorStore])
+    gps.dispose() // clears the walk-polling interval
+  }, [scenarios, constructorStore, gps])
 
   return (
     <View activePanel='control'>

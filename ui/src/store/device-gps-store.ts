@@ -421,6 +421,14 @@ export class DeviceGpsStore {
     }
   }
 
+  // Called on device change / panel unmount so the 1 Hz walk-polling interval doesn't
+  // keep firing at a device we've navigated away from (leak). No network calls — same
+  // contract as DeviceScenariosStore.dispose(); the server-side GPS keepalive is
+  // independent and untouched.
+  dispose(): void {
+    this.stopWalkPolling()
+  }
+
   private async pollWalk(): Promise<void> {
     const device = await this.deviceBySerialStore.fetch()
     if (!device?.serial) return
