@@ -160,3 +160,28 @@ instances:
     # can set their own location in the UI on top.
     initial_lat: 55.751244
     initial_lon: 37.618423
+
+  # test-cell: op-v4 (baked property-driven RIL) instance for LIVE UI testing of the
+  # Cell-tower operblock and the "Sync cell towers with location" feature. Separate
+  # from the test1/2/3 fleet (which stays on op-v3). cell_geo mounts the OpenCelliD
+  # tower DB into its manager so the location-sync can look up real LTE towers.
+  - name: test-cell
+    serial: "emulator-test-cell:5555"
+    pulse_sink: emu_audio_5
+    pulse_source: emu_mic_5
+    v4l2_device: /dev/video24
+    manager_port: 7604
+    adb_port: 5560
+    vnc_port: 6084
+    webrtc_udp_min: 40080
+    webrtc_udp_max: 40090
+    op_mcc: "250"
+    op_mnc: "01"
+    op_name: MTS
+    emulator_image: orchid-emulator:op-v4
+    phone_number: "79005550101"
+    # Moscow centre — a dense LTE area, so the tower-sync resolves real nearby cells.
+    initial_lat: 55.7558
+    initial_lon: 37.6173
+    # Mount opencellid-data/towers.db into the manager + set CELL_GEO_DB (op-v4 only).
+    cell_geo: true

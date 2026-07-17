@@ -49,7 +49,8 @@ export const LocationSection = observer(() => {
   const scenarios = useInjection(CONTAINER_IDS.deviceScenariosStore)
 
   const active =
-    gps.appliedLatitude != null || gps.isWalkActive || scenarios.weatherOn || scenarios.bssidSyncOn
+    gps.appliedLatitude != null || gps.isWalkActive ||
+    scenarios.weatherOn || scenarios.bssidSyncOn || scenarios.cellSyncOn
 
   return (
     <PanelSection active={active} icon={<Icon28LocationOutline />} title='Location'>
@@ -74,21 +75,21 @@ export const LocationSection = observer(() => {
 
       <div className={styles.buttons}>
         <Button
+          disabled={!gps.isValid || gps.isApplying || gps.isStopping}
           loading={gps.isApplying}
           size='s'
           stretched
-          disabled={!gps.isValid || gps.isApplying || gps.isStopping}
           onClick={() => { void gps.apply() }}
         >
           Set GPS
         </Button>
         <Button
           appearance='negative'
+          disabled={gps.isApplying || gps.isStopping}
+          loading={gps.isStopping}
           mode='secondary'
           size='s'
           stretched
-          disabled={gps.isApplying || gps.isStopping}
-          loading={gps.isStopping}
           onClick={() => { void gps.stop() }}
         >
           Stop
@@ -134,6 +135,23 @@ export const LocationSection = observer(() => {
         </Footnote>
       )}
 
+      <SelectionControl
+        className={styles.toggle}
+        title="Sets the serving cell to the nearest real LTE tower of this instance's operator. Serving cell only — neighbors need a reboot."
+      >
+        <Switch checked={scenarios.cellSyncOn} onChange={(e) => scenarios.toggleCellSync(e.target.checked)} />
+        <SelectionControl.Label>Sync cell towers with location</SelectionControl.Label>
+      </SelectionControl>
+      <StatusLine
+        error={!!scenarios.cellSyncError}
+        text={scenarios.cellSyncApplying ? 'Looking up cell…' : (scenarios.cellSyncError ?? scenarios.cellSyncStatus)}
+      />
+      {scenarios.cellSyncOn && (
+        <Footnote className={styles.note}>
+          Serving cell follows your location (~6s per change); neighbors need reboot.
+        </Footnote>
+      )}
+
       {/* ---------------- Walk simulation ---------------- */}
       <Header size='s'>Walk simulation</Header>
       <FormLayoutGroup mode='horizontal'>
@@ -168,27 +186,27 @@ export const LocationSection = observer(() => {
       <div className={styles.buttons}>
         {!gps.isWalkActive && (
           <Button
+            disabled={!gps.isWalkInputValid || gps.walkIsStarting}
             loading={gps.walkIsStarting}
             size='s'
             stretched
-            disabled={!gps.isWalkInputValid || gps.walkIsStarting}
             onClick={() => { void gps.startWalk() }}
           >
             Start walk
           </Button>
         )}
         {gps.walkBackend?.status === 'running' && (
-          <Button mode='secondary' size='s' stretched disabled={gps.walkIsControlling} onClick={() => { void gps.pauseWalk() }}>
+          <Button disabled={gps.walkIsControlling} mode='secondary' size='s' stretched onClick={() => { void gps.pauseWalk() }}>
             Pause
           </Button>
         )}
         {gps.walkBackend?.status === 'paused' && (
-          <Button size='s' stretched disabled={gps.walkIsControlling} onClick={() => { void gps.resumeWalk() }}>
+          <Button disabled={gps.walkIsControlling} size='s' stretched onClick={() => { void gps.resumeWalk() }}>
             Resume
           </Button>
         )}
         {gps.isWalkActive && (
-          <Button appearance='negative' mode='secondary' size='s' stretched disabled={gps.walkIsControlling} onClick={() => { void gps.stopWalk() }}>
+          <Button appearance='negative' disabled={gps.walkIsControlling} mode='secondary' size='s' stretched onClick={() => { void gps.stopWalk() }}>
             Stop walk
           </Button>
         )}

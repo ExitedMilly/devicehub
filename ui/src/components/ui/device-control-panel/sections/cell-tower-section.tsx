@@ -26,8 +26,22 @@ const RAT_OPTIONS: Array<{ value: CellRat; label: string }> = [
  */
 export const CellTowerSection = observer(() => {
   const cell = useInjection(CONTAINER_IDS.deviceCellTowerStore)
+  const scenarios = useInjection(CONTAINER_IDS.deviceScenariosStore)
 
   useEffect(() => { void cell.fetchStatus() }, [cell])
+
+  // Newest-wins with the "Sync cell towers with location" toggle: a deliberate
+  // manual apply/reset takes over, so turn the auto-sync off (else it would
+  // re-point the serving cell on the next move). Mirrors GPS↔walk exclusion.
+  const applyManual = (): void => {
+    scenarios.toggleCellSync(false)
+    void cell.apply()
+  }
+
+  const resetManual = (): void => {
+    scenarios.toggleCellSync(false)
+    void cell.reset()
+  }
 
   return (
     <PanelSection
@@ -125,7 +139,7 @@ export const CellTowerSection = observer(() => {
           className={styles.applyButton}
           disabled={!cell.isValid || cell.isApplying}
           type='button'
-          onClick={() => { void cell.apply() }}
+          onClick={applyManual}
         >
           {cell.isApplying ? 'Applying...' : 'Apply'}
         </button>
@@ -133,7 +147,7 @@ export const CellTowerSection = observer(() => {
           className={styles.restoreButton}
           disabled={cell.isApplying}
           type='button'
-          onClick={() => { void cell.reset() }}
+          onClick={resetManual}
         >
           Reset
         </button>

@@ -1,0 +1,6 @@
+# OpenCelliD dump + derived DB are NOT committed (large, and CC-BY-SA 4.0
+# ShareAlike — bundling into a distributed product is a separate legal decision).
+# build_db.py stays tracked so the DB is reproducible from a freshly downloaded dump.
+*.csv
+*.csv.gz
+*.db

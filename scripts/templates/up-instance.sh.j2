@@ -59,6 +59,11 @@ docker image inspect orchid-emulator:op-v2 >/dev/null 2>&1 || \
     docker build -f "$REPO_ROOT/docker/emulator-operator/Dockerfile.v2" -t orchid-emulator:op-v2 "$REPO_ROOT/docker/emulator-operator"
 docker image inspect orchid-emulator:op-v3 >/dev/null 2>&1 || \
     docker build -f "$REPO_ROOT/docker/emulator-operator/Dockerfile.v3" -t orchid-emulator:op-v3 "$REPO_ROOT/docker/emulator-operator"
+{% elif emu_image == 'orchid-emulator:op-v4' %}
+# op-v4 = op-v3 + baked property-driven RIL (cell spoofing) + /etc/passwd self-heal.
+# NOT auto-built (Dockerfile.v4 needs the compiled libcuttlefish-ril-2.so, ~20GB image).
+docker image inspect orchid-emulator:op-v4 >/dev/null 2>&1 || { \
+    echo "[{{ instance.name }}] ERROR: orchid-emulator:op-v4 image missing — build it first (docker/emulator-operator/Dockerfile.v4)"; exit 1; }
 {% endif %}
 # Stop any previous container with the same name
 docker stop "$EMULATOR_NAME" "$CAPTURE_NAME" 2>/dev/null || true
@@ -85,10 +90,11 @@ docker run -d \
     -e BACKUP_DIR="/backups" \
     -e LOG_PRETTY="${LOG_PRETTY:-1}" \
     -e STF_SECRET="${STF_SECRET:-nosecret}" \
-    -e AUTH_REQUIRED="${AUTH_REQUIRED:-0}"{% if instance.wifi_ssid %} -e WIFI_SSID="{{ instance.wifi_ssid }}"{% if instance.wifi_password %} -e WIFI_PASSWORD="{{ instance.wifi_password }}"{% endif %}{% if instance.wifi_mac %} -e WIFI_MAC="{{ instance.wifi_mac }}"{% endif %}{% endif %}{% if instance.initial_lat is not none %} -e INITIAL_LAT="{{ instance.initial_lat }}" -e INITIAL_LON="{{ instance.initial_lon }}"{% endif %}{% if instance.cell_cid is not none %} -e CELL_CID="{{ instance.cell_cid }}" -e CELL_LAC="{{ instance.cell_lac }}" -e CELL_RAT="{{ instance.cell_rat }}"{% if instance.cell_tac is not none %} -e CELL_TAC="{{ instance.cell_tac }}"{% endif %}{% if instance.cell_neighbors %} -e CELL_NEIGHBORS="{{ instance.cell_neighbors }}"{% endif %}{% endif %} \
+    -e AUTH_REQUIRED="${AUTH_REQUIRED:-0}"{% if instance.wifi_ssid %} -e WIFI_SSID="{{ instance.wifi_ssid }}"{% if instance.wifi_password %} -e WIFI_PASSWORD="{{ instance.wifi_password }}"{% endif %}{% if instance.wifi_mac %} -e WIFI_MAC="{{ instance.wifi_mac }}"{% endif %}{% endif %}{% if instance.initial_lat is not none %} -e INITIAL_LAT="{{ instance.initial_lat }}" -e INITIAL_LON="{{ instance.initial_lon }}"{% endif %}{% if instance.cell_cid is not none %} -e CELL_CID="{{ instance.cell_cid }}" -e CELL_LAC="{{ instance.cell_lac }}" -e CELL_RAT="{{ instance.cell_rat }}"{% if instance.cell_tac is not none %} -e CELL_TAC="{{ instance.cell_tac }}"{% endif %}{% if instance.cell_neighbors %} -e CELL_NEIGHBORS="{{ instance.cell_neighbors }}"{% endif %}{% endif %}{% if instance.cell_geo %} -e CELL_GEO_DB="/opencellid/towers.db"{% endif %} \
     -v "{{ defaults.pulse_volume }}:/run/pulse" \
     -v "{{ env.BACKUPS_DIR }}:/backups" \
-    -v "${TOKEN_FILE}:/run/console-token:ro" \
+    -v "${TOKEN_FILE}:/run/console-token:ro" \{% if instance.cell_geo %}
+    -v "$REPO_ROOT/opencellid-data/towers.db:/opencellid/towers.db:ro" \{% endif %}
     --device "{{ instance.v4l2_device }}:/dev/video0" \
     -p "{{ instance.manager_port }}:{{ instance.manager_port }}" \
     -p "{{ instance.webrtc_udp_min }}-{{ instance.webrtc_udp_max }}:{{ instance.webrtc_udp_min }}-{{ instance.webrtc_udp_max }}/udp" \

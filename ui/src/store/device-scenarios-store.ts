@@ -1,6 +1,8 @@
 import { makeAutoObservable, runInAction, reaction } from 'mobx'
 import { inject, injectable } from 'inversify'
 
+import { managerApiFetch } from '@/api/manager-api'
+
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 import { deviceConnectionRequired } from '@/config/inversify/decorators'
 import { DeviceLightStore } from '@/store/device-light-store'
@@ -9,7 +11,6 @@ import { DevicePoseStore } from '@/store/device-pose-store'
 import { DeviceNetworkStore } from '@/store/device-network-store'
 import { DeviceBySerialStore } from '@/store/device-by-serial-store'
 import { DeviceGpsStore } from '@/store/device-gps-store'
-import { managerApiFetch } from '@/api/manager-api'
 
 // ===========================================================================
 // Calibration defaults — tweak freely. Every magic number a scenario applies
@@ -77,6 +78,14 @@ const BSSID_APPLY_TIMEOUT_MS = 22000
 const BSSID_MAX_AGE_MS = 60 * 60 * 1000     // 1 h
 const BSSID_CHECK_INTERVAL_MS = 5 * 60 * 1000 // staleness check cadence
 
+// "Sync cell towers with location": the serving cell follows GPS to the nearest real
+// LTE tower of the instance's operator. A RIL restart per apply is ~7s, so re-sync
+// only on a km-scale move — a cell covers km anyway. Distance-only (a stationary
+// device's cell doesn't change, and the backend skips the restart when the nearest
+// tower is unchanged), so no staleness timer.
+const CELL_DISTANCE_KM = 1.5
+const CELL_APPLY_TIMEOUT_MS = 20000
+
 // "Low battery" preset target (%).
 const LOW_BATTERY_PCT = 15
 
@@ -137,7 +146,9 @@ function sleep(ms: number): Promise<void> {
 
 function clampInt(value: number, lo: number, hi: number): number {
   const n = Math.round(Number(value))
+
   if (!Number.isFinite(n)) return lo
+
   return Math.max(lo, Math.min(hi, n))
 }
 
@@ -150,6 +161,7 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   const dLon = toRad(lon2 - lon1)
   const a = Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
+
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)))
 }
 
@@ -224,6 +236,19 @@ export class DeviceScenariosStore {
   private bssidPending = false
   private bssidTimer: number | null = null
 
+  // Ambient "Sync cell towers with location": the serving cell follows GPS to the
+  // nearest real LTE tower of the instance's operator (setprop + RIL restart ~7s).
+  // Serving cell only — neighbours need a reboot. Distance-only throttle; disabling
+  // just stops syncing and leaves the last-synced cell (no DELETE, unlike BSSID).
+  cellSyncOn = false
+  cellSyncApplying = false
+  cellSyncStatus: string | null = null
+  cellSyncError: string | null = null
+  private lastCellLat: number | null = null
+  private lastCellLon: number | null = null
+  private cellFetching = false
+  private cellPending = false
+
   // ----- internal (non-observable) timer/loop state -----
   private cycleTimer: number | null = null
   private rotateTimer: number | null = null
@@ -235,7 +260,9 @@ export class DeviceScenariosStore {
   private drainCounter = 0
   private drainBusy = false
 
-  constructor(
+  // in a reactive context.
+private applyChain: Promise<void> = Promise.resolve()
+constructor(
     @inject(CONTAINER_IDS.deviceLightStore) private light: DeviceLightStore,
     @inject(CONTAINER_IDS.deviceBatteryStore) private battery: DeviceBatteryStore,
     @inject(CONTAINER_IDS.devicePoseStore) private pose: DevicePoseStore,
@@ -267,6 +294,13 @@ export class DeviceScenariosStore {
       () => this.bssidLocationKey,
       () => { if (this.bssidSyncOn) void this.maybeFetchBssid() }
     )
+
+    // Same pattern for cell-sync: re-point the serving cell at the nearest LTE
+    // tower when the applied/walk location changes (distance-throttled, km-scale).
+    reaction(
+      () => this.cellLocationKey,
+      () => { if (this.cellSyncOn) void this.maybeFetchCellSync() }
+    )
   }
 
   // ===================== Realistic sensors (noise) =====================
@@ -275,9 +309,11 @@ export class DeviceScenariosStore {
   // light -> light sensor; pose -> accel/orientation/magnetometer.
   private get noiseOwnedResources(): ScenarioResource[] {
     const owned = new Set<ScenarioResource>()
+
     for (const o of this.activeOwners()) {
       for (const r of o.resources) if (NOISE_RESOURCES.includes(r)) owned.add(r)
     }
+
     return Array.from(owned)
   }
 
@@ -287,7 +323,9 @@ export class DeviceScenariosStore {
 
   private async pushSensorNoise(): Promise<void> {
     const device = await this.deviceBySerialStore.fetch()
+
     if (!device?.serial) return
+
     try {
       const url = `/manager-api/sensor-noise/${encodeURIComponent(device.serial)}`
       await managerApiFetch(url, {
@@ -331,11 +369,14 @@ export class DeviceScenariosStore {
   // reflect a later apply if the user pokes the operblock mid-scenario.
   async applyTemperatureValue(value: number): Promise<string | null> {
     this.setTemperatureValue(value)
+
     if (!this.temperatureOn) {
       this.preemptConflicting(AMBIENT_META.temperature.resources, 'ambient:temperature')
       runInAction(() => { this.temperatureOn = true })
+
       return this.enableTemperature()
     }
+
     return this.applyReporting()
   }
 
@@ -360,6 +401,7 @@ export class DeviceScenariosStore {
   // set), THEN apply. Continuous operblocks self-heal; temperature is set-and-hold.
   private async enableTemperature(): Promise<string | null> {
     if (this.sensorNoiseOn) await this.pushSensorNoise()
+
     return this.applyReporting()
   }
 
@@ -367,8 +409,8 @@ export class DeviceScenariosStore {
   // failed). Used by both the Apply button and by enabling the operblock.
   // Serialize temperature applies into a chain. Observable-by-ref (like the timer
   // fields) is harmless — it's only ever read/written inside applyReporting, never
-  // in a reactive context.
-  private applyChain: Promise<void> = Promise.resolve()
+  
+  
 
   private applyReporting(): Promise<string | null> {
     // Serialize applies. The old guard `if (temperatureApplying) return` DROPPED an
@@ -383,6 +425,7 @@ export class DeviceScenariosStore {
     const run = this.applyChain.then(() => this.runTemperatureApply(celsius))
     // A rejection must not poison the chain (runTemperatureApply already swallows).
     this.applyChain = run.then(() => undefined, () => undefined)
+
     return run
   }
 
@@ -392,14 +435,17 @@ export class DeviceScenariosStore {
       this.temperatureStatus = null
       this.temperatureError = null
     })
+
     try {
       await this.postTemperature(celsius)
       // Only report if the operblock is still on — if it was toggled off mid-apply,
       // a stale "Applied N°C" next to an off switch would be misleading.
       runInAction(() => { if (this.temperatureOn) this.temperatureStatus = `Applied ${celsius}°C` })
+
       return null
     } catch {
       runInAction(() => { if (this.temperatureOn) this.temperatureError = 'Apply failed — device busy' })
+
       return 'Apply failed — device busy'
     } finally {
       runInAction(() => { this.temperatureApplying = false })
@@ -421,9 +467,11 @@ export class DeviceScenariosStore {
   // timeout so callers can surface the failure (managerApiFetch never throws on non-2xx).
   private async postTemperature(celsius: number): Promise<void> {
     const device = await this.deviceBySerialStore.fetch()
+
     if (!device?.serial) throw new Error('No device')
     const controller = new AbortController()
     const timer = window.setTimeout(() => controller.abort(), TEMPERATURE_APPLY_TIMEOUT_MS)
+
     try {
       const url = `/manager-api/temperature/${encodeURIComponent(device.serial)}`
       const res = await managerApiFetch(url, {
@@ -432,6 +480,7 @@ export class DeviceScenariosStore {
         body: JSON.stringify({ celsius }),
         signal: controller.signal,
       })
+
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
     } finally {
       window.clearTimeout(timer)
@@ -449,6 +498,7 @@ export class DeviceScenariosStore {
   private get weatherLocationKey(): string {
     if (!this.weatherOn) return ''
     const loc = this.gpsStore.currentLocation
+
     return loc == null ? '' : `${loc.lat},${loc.lon}`
   }
 
@@ -515,24 +565,34 @@ export class DeviceScenariosStore {
   // don't overlap requests.
   private async maybeFetchWeather(): Promise<void> {
     if (!this.weatherOn) return
+
     // A location change arriving mid-fetch is coalesced and drained after this one
     // finishes, so a country jump inside the fetch window isn't silently lost.
-    if (this.weatherFetching) { runInAction(() => { this.weatherPending = true }); return }
+    if (this.weatherFetching) { runInAction(() => { this.weatherPending = true });
+
+ return }
+
     const loc = this.gpsStore.currentLocation
+
     if (loc == null) {
       runInAction(() => { this.weatherError = 'Apply a device location first' })
+
       return
     }
+
     const lat = loc.lat
     const lon = loc.lon
+
     // Two triggers, OR'd: re-query on a >10km move (instant — relocation / walk) OR
     // when the last request is stale (>30 min — stationary device, weather drifts).
     // Skip only when we're both close AND fresh.
     if (this.lastWeatherLat != null && this.lastWeatherLon != null && this.lastWeatherTime != null) {
       const movedFar = haversineKm(lat, lon, this.lastWeatherLat, this.lastWeatherLon) >= WEATHER_DISTANCE_KM
       const stale = Date.now() - this.lastWeatherTime >= WEATHER_MAX_AGE_MS
+
       if (!movedFar && !stale) return
     }
+
     runInAction(() => {
       this.weatherFetching = true
       this.weatherApplying = true
@@ -544,6 +604,7 @@ export class DeviceScenariosStore {
       this.lastWeatherLon = lon
       this.lastWeatherTime = Date.now()
     })
+
     try {
       const result = await this.postWeather(lat, lon)
       runInAction(() => {
@@ -557,6 +618,7 @@ export class DeviceScenariosStore {
         this.weatherApplying = false
       })
     }
+
     // Drain a change that arrived while fetching: re-read the current location and
     // re-apply the distance throttle (returns without a fetch once caught up).
     if (this.weatherPending && this.weatherOn) {
@@ -567,9 +629,11 @@ export class DeviceScenariosStore {
 
   private async postWeather(lat: number, lon: number): Promise<{ temp: number; humidity: number | null; pressure: number | null }> {
     const device = await this.deviceBySerialStore.fetch()
+
     if (!device?.serial) throw new Error('No device')
     const controller = new AbortController()
     const timer = window.setTimeout(() => controller.abort(), WEATHER_APPLY_TIMEOUT_MS)
+
     try {
       const url = `/manager-api/weather/${encodeURIComponent(device.serial)}`
       const res = await managerApiFetch(url, {
@@ -579,7 +643,9 @@ export class DeviceScenariosStore {
         signal: controller.signal,
       })
       const data = await res.json().catch(() => null)
+
       if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`)
+
       return { temp: data.temp, humidity: data.humidity, pressure: data.pressure }
     } finally {
       window.clearTimeout(timer)
@@ -595,6 +661,7 @@ export class DeviceScenariosStore {
   private get bssidLocationKey(): string {
     if (!this.bssidSyncOn) return ''
     const loc = this.gpsStore.currentLocation
+
     return loc == null ? '' : `${loc.lat},${loc.lon}`
   }
 
@@ -641,20 +708,30 @@ export class DeviceScenariosStore {
 
   private async maybeFetchBssid(): Promise<void> {
     if (!this.bssidSyncOn) return
-    if (this.bssidFetching) { runInAction(() => { this.bssidPending = true }); return }
+
+    if (this.bssidFetching) { runInAction(() => { this.bssidPending = true });
+
+ return }
+
     const loc = this.gpsStore.currentLocation
+
     if (loc == null) {
       runInAction(() => { this.bssidError = 'Apply a device location first' })
+
       return
     }
+
     const lat = loc.lat
     const lon = loc.lon
+
     // Re-inject on a >700m move OR when stale (>1h). Skip only when close AND fresh.
     if (this.lastBssidLat != null && this.lastBssidLon != null && this.lastBssidTime != null) {
       const movedFar = haversineKm(lat, lon, this.lastBssidLat, this.lastBssidLon) >= BSSID_DISTANCE_KM
       const stale = Date.now() - this.lastBssidTime >= BSSID_MAX_AGE_MS
+
       if (!movedFar && !stale) return
     }
+
     runInAction(() => {
       this.bssidFetching = true
       this.bssidApplying = true
@@ -663,6 +740,7 @@ export class DeviceScenariosStore {
       this.lastBssidLon = lon
       this.lastBssidTime = Date.now()
     })
+
     try {
       const result = await this.postBssid(lat, lon)
       runInAction(() => {
@@ -676,6 +754,7 @@ export class DeviceScenariosStore {
         this.bssidApplying = false
       })
     }
+
     if (this.bssidPending && this.bssidSyncOn) {
       runInAction(() => { this.bssidPending = false })
       void this.maybeFetchBssid()
@@ -684,9 +763,11 @@ export class DeviceScenariosStore {
 
   private async postBssid(lat: number, lon: number): Promise<{ count: number; total: number }> {
     const device = await this.deviceBySerialStore.fetch()
+
     if (!device?.serial) throw new Error('No device')
     const controller = new AbortController()
     const timer = window.setTimeout(() => controller.abort(), BSSID_APPLY_TIMEOUT_MS)
+
     try {
       const url = `/manager-api/wifi-geo/${encodeURIComponent(device.serial)}`
       const res = await managerApiFetch(url, {
@@ -696,7 +777,9 @@ export class DeviceScenariosStore {
         signal: controller.signal,
       })
       const data = await res.json().catch(() => null)
+
       if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`)
+
       return { count: data.count, total: data.total }
     } finally {
       window.clearTimeout(timer)
@@ -707,9 +790,133 @@ export class DeviceScenariosStore {
   private releaseBssid(): void {
     void (async () => {
       const device = await this.deviceBySerialStore.fetch()
+
       if (!device?.serial) return
       await managerApiFetch(`/manager-api/wifi-geo/${encodeURIComponent(device.serial)}`, { method: 'DELETE' })
     })().catch(() => { /* best-effort */ })
+  }
+
+  // ===================== Sync cell towers with location =====================
+  // Serving cell follows GPS to the nearest real LTE tower of the instance's
+  // operator (OpenCelliD DB, backend cell-geo-sync). Serving only — neighbours
+  // need a reboot. Distance-only throttle (a RIL restart per apply is ~7s).
+
+  private get cellLocationKey(): string {
+    if (!this.cellSyncOn) return ''
+
+    const loc = this.gpsStore.currentLocation
+
+    return loc == null ? '' : `${loc.lat},${loc.lon}`
+  }
+
+  toggleCellSync(on: boolean): void {
+    if (on) {
+      runInAction(() => {
+        this.cellSyncOn = true
+        this.cellSyncStatus = null
+        this.cellSyncError = null
+        this.lastCellLat = null
+        this.lastCellLon = null
+      })
+      // The cellLocationKey reaction fires the initial sync for the current location.
+    } else {
+      runInAction(() => {
+        this.cellSyncOn = false
+        this.cellSyncStatus = null
+        this.cellSyncError = null
+        this.lastCellLat = null
+        this.lastCellLon = null
+        this.cellPending = false
+      })
+      // On disable we STOP syncing but leave the last-synced serving cell in place
+      // (until a manual Reset or a new manual apply) — no DELETE, unlike BSSID.
+    }
+  }
+
+  private async maybeFetchCellSync(): Promise<void> {
+    if (!this.cellSyncOn) return
+
+    if (this.cellFetching) {
+      runInAction(() => { this.cellPending = true })
+
+      return
+    }
+
+    const loc = this.gpsStore.currentLocation
+
+    if (loc == null) {
+      runInAction(() => { this.cellSyncError = 'Apply a device location first' })
+
+      return
+    }
+
+    const lat = loc.lat
+    const lon = loc.lon
+
+    // Re-sync only on a >1.5km move (a RIL restart per apply is ~7s; cells cover km).
+    if (this.lastCellLat != null && this.lastCellLon != null) {
+      if (haversineKm(lat, lon, this.lastCellLat, this.lastCellLon) < CELL_DISTANCE_KM) return
+    }
+
+    runInAction(() => {
+      this.cellFetching = true
+      this.cellSyncApplying = true
+      this.cellSyncError = null
+      this.lastCellLat = lat
+      this.lastCellLon = lon
+    })
+
+    try {
+      const result = await this.postCellSync(lat, lon)
+
+      runInAction(() => {
+        if (!this.cellSyncOn) return
+
+        if (result.changed) {
+          this.cellSyncStatus = `Cell ${result.cid} · ${result.operator ?? ''} · ${result.distanceM}m`
+        } else {
+          this.cellSyncStatus = result.reason ?? 'On nearest cell'
+        }
+      })
+    } catch {
+      runInAction(() => { if (this.cellSyncOn) this.cellSyncError = 'Cell lookup unavailable' })
+    } finally {
+      runInAction(() => {
+        this.cellFetching = false
+        this.cellSyncApplying = false
+      })
+    }
+
+    if (this.cellPending && this.cellSyncOn) {
+      runInAction(() => { this.cellPending = false })
+      void this.maybeFetchCellSync()
+    }
+  }
+
+  private async postCellSync(lat: number, lon: number): Promise<{ changed: boolean; cid?: number; operator?: string; distanceM?: number; reason?: string }> {
+    const device = await this.deviceBySerialStore.fetch()
+
+    if (!device?.serial) throw new Error('No device')
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), CELL_APPLY_TIMEOUT_MS)
+
+    try {
+      const url = `/manager-api/cell-sync/${encodeURIComponent(device.serial)}`
+      const res = await managerApiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ latitude: lat, longitude: lon }),
+        signal: controller.signal,
+      })
+      const data = await res.json().catch(() => null)
+
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `HTTP ${res.status}`)
+
+      return { changed: !!data.changed, cid: data.cid, operator: data.operator, distanceM: data.distanceM, reason: data.reason }
+    } finally {
+      window.clearTimeout(timer)
+    }
   }
 
   // ===================== Resource model / preemption =====================
@@ -782,17 +989,21 @@ export class DeviceScenariosStore {
   // is what keeps preemption pair-agnostic.
   private activeOwners(): Array<{ key: OwnerKey; resources: ScenarioResource[]; deactivate: () => void }> {
     const owners: Array<{ key: OwnerKey; resources: ScenarioResource[]; deactivate: () => void }> = []
+
     for (const a of this.activeAmbients) {
       owners.push({ key: `ambient:${a.id}`, resources: a.resources, deactivate: () => this.stopAmbientById(a.id) })
     }
+
     for (const name of this.activePresets) {
       owners.push({ key: `preset:${name}`, resources: this.resourcesOf(name), deactivate: () => { this.activePresets.delete(name) } })
     }
+
     for (const [id, resources] of this.activeCustom) {
       // Like presets, deactivation just drops the active flag (no device write —
       // the new owner is about to take the resource over).
       owners.push({ key: `custom:${id}`, resources, deactivate: () => { this.activeCustom.delete(id) } })
     }
+
     return owners
   }
 
@@ -802,6 +1013,7 @@ export class DeviceScenariosStore {
   private preemptConflicting(resources: ScenarioResource[], exceptKey?: OwnerKey): void {
     for (const o of this.activeOwners()) {
       if (o.key === exceptKey) continue
+
       if (o.resources.some((r) => resources.includes(r))) o.deactivate()
     }
   }
@@ -855,8 +1067,10 @@ export class DeviceScenariosStore {
       this.activePresets.clear()
       this.activeCustom.clear()
       void this.runSteps(name, this.buildPresetSteps(name))
+
       return
     }
+
     // Newest wins: preempt every conflicting owner (ambient OR preset), then mark
     // this preset active and run its steps. Re-clicking an active preset just
     // re-applies it (idempotent) and keeps it active.
@@ -901,11 +1115,14 @@ export class DeviceScenariosStore {
       this.errorMessage = null
       this.statusMessage = null
     })
+
     try {
       for (let i = 0; i < steps.length; i++) {
         await steps[i]()
+
         if (i < steps.length - 1) await sleep(STEP_DELAY_MS)
       }
+
       runInAction(() => { this.statusMessage = `Applied preset: ${name}` })
     } catch (error) {
       runInAction(() => {
@@ -944,6 +1161,7 @@ export class DeviceScenariosStore {
   private async cycleTick(): Promise<void> {
     if (this.cycleBusy) return
     this.cycleBusy = true
+
     try {
       this.cycleT += CYCLE_TICK_SEC
       const period = Math.max(MIN_CYCLE_PERIOD_SEC, this.cyclePeriodSec)
@@ -967,6 +1185,7 @@ export class DeviceScenariosStore {
       window.clearInterval(this.cycleTimer)
       this.cycleTimer = null
     }
+
     if (resetLight) {
       this.light.applyPreset(LUX.neutral)
       void this.light.apply()
@@ -989,6 +1208,7 @@ export class DeviceScenariosStore {
   setRotateIntervalSec(value: number): void {
     const v = Number.isFinite(value) ? Math.max(MIN_ROTATE_INTERVAL_SEC, Math.round(value)) : DEFAULT_ROTATE_INTERVAL_SEC
     this.rotateIntervalSec = v
+
     if (this.rotateOn) this.startRotate() // restart with the new interval
   }
 
@@ -1002,6 +1222,7 @@ export class DeviceScenariosStore {
   private async rotateTick(): Promise<void> {
     if (this.rotateBusy) return
     this.rotateBusy = true
+
     try {
       this.rotateState = !this.rotateState
       const p = this.rotateState ? POSE_LANDSCAPE : POSE_PORTRAIT
@@ -1047,6 +1268,7 @@ export class DeviceScenariosStore {
   // Effective floor is always strictly below the start, so the drain always moves.
   private effectiveDrainFloor(): number {
     const start = clampInt(this.drainStartPct, 1, 100)
+
     return clampInt(this.drainFloorPct, 0, start - 1)
   }
 
@@ -1066,12 +1288,18 @@ export class DeviceScenariosStore {
   private async drainTick(): Promise<void> {
     if (this.drainBusy) return
     this.drainBusy = true
+
     try {
       const floor = this.effectiveDrainFloor()
-      if (this.drainCounter <= floor) { this.stopDrain(); return }
+
+      if (this.drainCounter <= floor) { this.stopDrain();
+
+ return }
+
       this.drainCounter = Math.max(floor, this.drainCounter - 1)
       this.battery.setLevel(this.drainCounter)
       await this.battery.apply()
+
       if (this.drainCounter <= floor) this.stopDrain()
     } catch {
       // ignore transient failures; next tick retries
@@ -1085,13 +1313,16 @@ export class DeviceScenariosStore {
       window.clearInterval(this.drainTimer)
       this.drainTimer = null
     }
+
     // Safe whether called synchronously (toggle) or post-await (tick reached floor).
     runInAction(() => { this.batteryDrainEnabled = false })
   }
 
   get statusText(): string | null {
     if (this.errorMessage) return this.errorMessage
+
     if (this.busyPreset) return `Applying: ${this.busyPreset}…`
+
     return this.statusMessage
   }
 
@@ -1128,6 +1359,14 @@ export class DeviceScenariosStore {
       this.lastBssidTime = null
       this.bssidFetching = false
       this.bssidPending = false
+      this.cellSyncOn = false
+      this.cellSyncApplying = false
+      this.cellSyncStatus = null
+      this.cellSyncError = null
+      this.lastCellLat = null
+      this.lastCellLon = null
+      this.cellFetching = false
+      this.cellPending = false
       this.activePresets.clear()
       this.activeCustom.clear()
     })

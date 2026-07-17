@@ -133,6 +133,11 @@ class Instance:
     cell_tac: Optional[int] = None
     cell_rat: Optional[str] = None            # gsm | umts | lte | nr
     cell_neighbors: Optional[str] = None      # "cid:lac:rssi,..."
+    # Bind-mount the OpenCelliD tower DB (opencellid-data/towers.db) into the manager
+    # and set CELL_GEO_DB, so "Sync cell towers with location" can look up the nearest
+    # real LTE tower. op-v4 only (the RIL patch is what makes cells settable). The DB
+    # is not committed; it must exist on the host at opencellid-data/towers.db.
+    cell_geo: bool = False
 
 
 @dataclass

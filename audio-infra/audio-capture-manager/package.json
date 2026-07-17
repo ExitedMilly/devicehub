@@ -10,6 +10,7 @@
     "@grpc/proto-loader": "^0.7.0",
     "@roamhq/wrtc": "^0.10.0",
     "pino": "^8.21.0",
-    "pino-pretty": "^10.3.1"
+    "pino-pretty": "^10.3.1",
+    "better-sqlite3": "^11.10.0"
   }
 }
