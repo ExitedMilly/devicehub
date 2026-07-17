@@ -1,0 +1,24 @@
+# op-v5: op-v4 + getprop identity masking. op-v4's baked property-driven RIL and
+# /etc/passwd self-heal are inherited unchanged; this layer only rewrites build.prop
+# to impersonate a real Redmi Note 12 4G (tapas_global, Android 13) so naive
+# anti-fraud getprop checks see a real phone instead of sdk_gphone64_x86_64.
+#
+# debugfs in-place edit of the NON-AVB build.prop partitions (product, vendor + its
+# /odm & /vendor_dlkm, system_ext) inside system.img — same GPT->super->logical
+# surgery as bake-ril.py, so GMS/Play is preserved (an AOSP rebuild would drop it:
+# op-v4 is a Google GMS prebuilt, the /aosp tree only builds AOSP sdk_phone).
+#
+# /system/build.prop is AVB-protected and left alone, so it keeps ro.debuggable=1 —
+# `adb root` still works, which the Cell-tower operblock relies on. That also leaves
+# the bare ro.build.{id,tags,type,flavor,product} as residual tells; the SELinux
+# label for setprop-without-root (orchid_ril_prop) is deferred (it needs a sepolicy
+# recompile or a fragile on-boot CIL recompile — not worth the unbootable risk while
+# adb root works). See the getprop-masking recon for the honest limits.
+FROM orchid-emulator:op-v4
+USER root
+
+COPY bake-prop.py /tmp/bake-prop.py
+RUN python3 /tmp/bake-prop.py && \
+    rm -f /tmp/bake-prop.py
+
+USER androidusr
