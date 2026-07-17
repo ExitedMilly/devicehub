@@ -1,0 +1,10 @@
+{
+  "_comment": "Canonical mobile-operator table — the SINGLE source of truth for operator identity. Read by the manager (domain/operators.js) at runtime and by scripts/generate.py at instance-generation time. Keeping one file means the op-shim NAME (baked at container creation from op_name) and the RIL numeric MCC/MNC can never disagree: both come from the same row. mnc is a string to preserve leading zeros; mncLen is derived from it.",
+  "operators": {
+    "mts":     { "mcc": "250", "mnc": "01", "name": "MTS",     "nameShort": "MTS" },
+    "megafon": { "mcc": "250", "mnc": "02", "name": "MegaFon", "nameShort": "MegaFon" },
+    "yota":    { "mcc": "250", "mnc": "11", "name": "Yota",    "nameShort": "Yota" },
+    "tele2":   { "mcc": "250", "mnc": "20", "name": "Tele2",   "nameShort": "Tele2" },
+    "beeline": { "mcc": "250", "mnc": "99", "name": "Beeline", "nameShort": "Beeline" }
+  }
+}

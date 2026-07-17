@@ -6,6 +6,7 @@ import { Panel, Tabs, TabsItem, View } from '@vkontakte/vkui'
 import { CONTAINER_IDS } from '@/config/inversify/container-ids'
 
 import { NetworkSection } from './sections/network-section'
+import { CellTowerSection } from './sections/cell-tower-section'
 import { BluetoothSection } from './sections/bluetooth-section'
 import { ProxySection } from './sections/proxy-section'
 import { LocationSection } from './sections/location-section'
@@ -64,6 +65,7 @@ export const DeviceControlPanel = observer(() => {
         {tab === 'controls' ? (
           <div className={styles.stack}>
             <NetworkSection />
+            <CellTowerSection />
             <BluetoothSection />
             <ProxySection />
             <LocationSection />

@@ -29,6 +29,7 @@ import { DeviceBatteryStore } from '@/store/device-battery-store'
 import { DeviceNetworkStore } from '@/store/device-network-store'
 import { DeviceScenariosStore } from '@/store/device-scenarios-store'
 import { DeviceProxyStore } from '@/store/device-proxy-store'
+import { DeviceCellTowerStore } from '@/store/device-cell-tower-store'
 import { DevicePhonenumberStore } from '@/store/device-phonenumber-store'
 import { DeviceBluetoothStore } from '@/store/device-bluetooth-store'
 import { DeviceBleBeaconStore } from '@/store/device-ble-beacon-store'
@@ -82,6 +83,7 @@ export const createDeviceContainer = (serial: string): Container => {
   deviceContainer.bind(CONTAINER_IDS.deviceNetworkStore).to(DeviceNetworkStore)
   deviceContainer.bind(CONTAINER_IDS.deviceScenariosStore).to(DeviceScenariosStore)
   deviceContainer.bind(CONTAINER_IDS.deviceProxyStore).to(DeviceProxyStore)
+  deviceContainer.bind(CONTAINER_IDS.deviceCellTowerStore).to(DeviceCellTowerStore)
   deviceContainer.bind(CONTAINER_IDS.devicePhonenumberStore).to(DevicePhonenumberStore)
   deviceContainer.bind(CONTAINER_IDS.deviceBluetoothStore).to(DeviceBluetoothStore)
   deviceContainer.bind(CONTAINER_IDS.deviceBleBeaconStore).to(DeviceBleBeaconStore)

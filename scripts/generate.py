@@ -115,6 +115,24 @@ class Instance:
     # together (lat -90..90, lon -180..180). Empty => emulator default (no-op).
     initial_lat: Optional[float] = None
     initial_lon: Optional[float] = None
+    # Optional operator id from the shared operator table (domain/operators.json,
+    # e.g. "mts"). When set, it expands to op_mcc/op_mnc/op_name/op_name_short from
+    # that one row, so the op-shim NAME and the numeric code can never disagree.
+    # Mutually exclusive with raw op_mcc/op_mnc/op_name. Empty => use the raw
+    # op_* fields (or stock).
+    operator: Optional[str] = None
+    # Optional per-instance INITIAL serving cell (op-v4 RIL-spoof image ONLY),
+    # applied by the manager after boot (cell-init) so a fresh device starts on
+    # this tower. Operator is NOT here — the manager pins MCC/MNC to the SIM the
+    # op-shim baked, so the cell is always consistent with the instance's operator.
+    # cid + lac + rat must be set together; tac and neighbors are optional. Just a
+    # starting value — the user can override it in the UI. Empty => stock cell.
+    # NOTE: only effective on emulator_image: orchid-emulator:op-v4.
+    cell_cid: Optional[int] = None
+    cell_lac: Optional[int] = None
+    cell_tac: Optional[int] = None
+    cell_rat: Optional[str] = None            # gsm | umts | lte | nr
+    cell_neighbors: Optional[str] = None      # "cid:lac:rssi,..."
 
 
 @dataclass
@@ -270,6 +288,47 @@ def load_env(path: Path) -> dict:
     return env
 
 
+# The operator table is the SINGLE source of truth, shared with the manager. It
+# lives in the manager's domain dir because the manager needs it at runtime (in
+# its container); generate.py reads that same file so a change never has to be
+# made twice. See audio-infra/audio-capture-manager/domain/operators.json.
+_OPERATORS_PATH = (Path(__file__).parent.parent /
+                   'audio-infra' / 'audio-capture-manager' / 'domain' / 'operators.json')
+
+
+def load_operators() -> dict:
+    """Return the operator table { id: {mcc, mnc, name, nameShort} } (or {})."""
+    try:
+        with open(_OPERATORS_PATH) as f:
+            return json.load(f).get('operators', {})
+    except (OSError, ValueError):
+        return {}
+
+
+def _expand_operator(inst: Instance, operators: dict) -> None:
+    """If inst.operator is an id, fill op_mcc/op_mnc/op_name from that one row.
+
+    Raises ValueError on an unknown id or a conflict with raw op_* fields, so the
+    op-shim name and the numeric code can only ever come from the same source.
+    """
+    if not inst.operator:
+        return
+    row = operators.get(inst.operator)
+    if row is None:
+        raise ValueError(
+            f"{inst.name}: unknown operator '{inst.operator}' "
+            f"(known: {', '.join(sorted(operators)) or 'none'})"
+        )
+    if inst.op_mcc or inst.op_mnc or inst.op_name:
+        raise ValueError(
+            f"{inst.name}: set either operator '{inst.operator}' OR raw op_mcc/op_mnc/op_name, not both"
+        )
+    inst.op_mcc = row['mcc']
+    inst.op_mnc = row['mnc']
+    inst.op_name = row['name']
+    inst.op_name_short = row.get('nameShort', row['name'])
+
+
 def parse_config(yaml_data: dict, env: dict) -> Config:
     """Convert raw yaml dict into typed Config dataclass."""
     if 'defaults' not in yaml_data:
@@ -279,6 +338,9 @@ def parse_config(yaml_data: dict, env: dict) -> Config:
 
     defaults = Defaults(**yaml_data['defaults'])
     instances = [Instance(**i) for i in yaml_data['instances']]
+    operators = load_operators()
+    for inst in instances:
+        _expand_operator(inst, operators)
     return Config(defaults=defaults, instances=instances, env=env)
 
 
@@ -452,6 +514,34 @@ def validate(config: Config) -> list:
                     errors.append(f"{inst.name}: initial_lon '{inst.initial_lon}' must be between -180 and 180")
             except (TypeError, ValueError):
                 errors.append(f"{inst.name}: initial_lat/initial_lon must be numbers")
+
+        # 8.11. cell_*: an initial serving cell (op-v4 only). cid+lac+rat are
+        # required together; tac and neighbors are optional. Operator is NOT part
+        # of the cell — the manager pins it to the baked SIM.
+        cell_rats = ('gsm', 'umts', 'lte', 'nr')
+        has_cid = inst.cell_cid is not None
+        has_lac = inst.cell_lac is not None
+        has_rat = inst.cell_rat is not None
+        if (has_cid or has_lac or has_rat) and not (has_cid and has_lac and has_rat):
+            errors.append(
+                f"{inst.name}: cell_cid, cell_lac and cell_rat must all be set together (or all omitted)"
+            )
+        elif has_cid and has_lac and has_rat:
+            if not isinstance(inst.cell_cid, int) or not (0 <= inst.cell_cid <= 268435455):
+                errors.append(f"{inst.name}: cell_cid '{inst.cell_cid}' must be an int 0..268435455")
+            if not isinstance(inst.cell_lac, int) or not (0 <= inst.cell_lac <= 65535):
+                errors.append(f"{inst.name}: cell_lac '{inst.cell_lac}' must be an int 0..65535")
+            if inst.cell_rat not in cell_rats:
+                errors.append(f"{inst.name}: cell_rat '{inst.cell_rat}' must be one of: {', '.join(cell_rats)}")
+            if inst.cell_tac is not None and (not isinstance(inst.cell_tac, int) or not (0 <= inst.cell_tac <= 65535)):
+                errors.append(f"{inst.name}: cell_tac '{inst.cell_tac}' must be an int 0..65535")
+            # The RIL spoof only exists on op-v4; warn loudly if the image can't honour it.
+            image = inst.emulator_image or config.defaults.emulator_image
+            if 'op-v4' not in (image or ''):
+                errors.append(
+                    f"{inst.name}: cell_* requires emulator_image with the RIL patch "
+                    f"(orchid-emulator:op-v4), but image is '{image}'"
+                )
 
     return errors
 

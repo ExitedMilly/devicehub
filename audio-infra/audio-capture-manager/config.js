@@ -78,6 +78,20 @@ const _initLon = parseFloat(process.env.INITIAL_LON);
 const INITIAL_LAT = Number.isFinite(_initLat) ? _initLat : null;
 const INITIAL_LON = Number.isFinite(_initLon) ? _initLon : null;
 
+// Optional: per-instance INITIAL serving cell (op-v4 RIL-spoof image only). When
+// cid+lac+rat are set, the manager applies them after boot (cell-init) so a fresh
+// device starts on this tower. Operator is NOT here — it is pinned to the SIM the
+// op-shim baked, so the cell is always consistent with the instance's operator.
+// Just a starting value; the user can override it in the UI. Empty => stock cell.
+const CELL_CID = process.env.CELL_CID || null;
+const CELL_LAC = process.env.CELL_LAC || null;
+const CELL_TAC = process.env.CELL_TAC || null; // optional; defaults to LAC in the RIL
+const CELL_RAT = process.env.CELL_RAT || null; // gsm | umts | lte | nr
+const CELL_NEIGHBORS = process.env.CELL_NEIGHBORS || null; // "cid:lac:rssi,..."
+const INITIAL_CELL = (CELL_CID && CELL_LAC && CELL_RAT)
+    ? { cid: CELL_CID, lac: CELL_LAC, tac: CELL_TAC, rat: CELL_RAT, neighbors: CELL_NEIGHBORS }
+    : null;
+
 // Auth config (P0.6)
 const STF_SECRET = process.env.STF_SECRET || null;
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === '1';
@@ -105,6 +119,7 @@ module.exports = {
     PULSE_SINK_NAME, PULSE_SOURCE_NAME,
     WIFI_SSID, WIFI_PASSWORD, WIFI_MAC, PHONE_NUMBER,
     INITIAL_LAT, INITIAL_LON,
+    INITIAL_CELL,
     STF_SECRET, AUTH_REQUIRED,
     DEVICEHUB_API_HOST, DEVICEHUB_API_PORT,
     OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS,

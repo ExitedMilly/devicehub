@@ -5,6 +5,7 @@ const walkSimulator = require('./domain/walk-simulator');
 const poseScenario = require('./domain/pose-scenario');
 const wifiAutoconnect = require('./domain/wifi-autoconnect');
 const gpsInit = require('./domain/gps-init');
+const cellInit = require('./domain/cell-init');
 const scheduler = require('./domain/scheduler');
 const backupLogical = require('./domain/backup-logical');
 
@@ -15,7 +16,7 @@ const {
     GPS_KEEPALIVE_INTERVAL_MS, PA_POLL_INTERVAL_MS, AUTO_DISCOVER, EMULATOR_MAP_RAW,
     SINGLE_MODE, INSTANCE_SERIAL, EMULATOR_ADB_HOST, EMULATOR_GRPC_HOST,
     AUTH_REQUIRED, STF_SECRET, WIFI_SSID, WIFI_PASSWORD, WIFI_MAC,
-    INITIAL_LAT, INITIAL_LON,
+    INITIAL_LAT, INITIAL_LON, INITIAL_CELL,
 } = config;
 
 if (AUTH_REQUIRED && !STF_SECRET) {
@@ -127,6 +128,11 @@ server.listen(MANAGER_PORT, '0.0.0.0', () => {
         // shows it instead of the emulator's Googleplex default. Just a starting value
         // — the user can override it in the UI. No-op when INITIAL_LAT/LON are unset.
         gpsInit.start(INSTANCE_SERIAL, INITIAL_LAT, INITIAL_LON);
+
+        // If an initial serving cell is configured (op-v4 image only), apply it after
+        // boot so the device starts on that tower. Operator is pinned to the SIM, so
+        // it stays consistent with the instance's operator. No-op when unset.
+        cellInit.start(INSTANCE_SERIAL, INITIAL_CELL);
 
         // Type-2 schedule daemon: applies saved scenarios at their scheduled time,
         // autonomously (no browser). Re-reads /backups/schedule.json + scenarios.json

@@ -45,6 +45,7 @@ import { DeviceBatteryStore } from '@/store/device-battery-store'
 import { DeviceNetworkStore } from '@/store/device-network-store'
 import { DeviceScenariosStore } from '@/store/device-scenarios-store'
 import { DeviceProxyStore } from '@/store/device-proxy-store'
+import { DeviceCellTowerStore } from '@/store/device-cell-tower-store'
 import { DevicePhonenumberStore } from '@/store/device-phonenumber-store'
 import { DeviceBluetoothStore } from '@/store/device-bluetooth-store'
 import { DeviceBleBeaconStore } from '@/store/device-ble-beacon-store'
@@ -98,6 +99,7 @@ export const CONTAINER_IDS = {
   deviceNetworkStore: Symbol.for('DeviceNetworkStore') as interfaces.ServiceIdentifier<DeviceNetworkStore>,
   deviceScenariosStore: Symbol.for('DeviceScenariosStore') as interfaces.ServiceIdentifier<DeviceScenariosStore>,
   deviceProxyStore: Symbol.for('DeviceProxyStore') as interfaces.ServiceIdentifier<DeviceProxyStore>,
+  deviceCellTowerStore: Symbol.for('DeviceCellTowerStore') as interfaces.ServiceIdentifier<DeviceCellTowerStore>,
   devicePhonenumberStore: Symbol.for('DevicePhonenumberStore') as interfaces.ServiceIdentifier<DevicePhonenumberStore>,
   deviceBluetoothStore: Symbol.for('DeviceBluetoothStore') as interfaces.ServiceIdentifier<DeviceBluetoothStore>,
   deviceBleBeaconStore: Symbol.for('DeviceBleBeaconStore') as interfaces.ServiceIdentifier<DeviceBleBeaconStore>,

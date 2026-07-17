@@ -21,6 +21,7 @@ const { handleTemperature } = require('./routes-temperature');
 const { handleWeather } = require('./routes-weather');
 const { handleWifiGeo } = require('./routes-wifi-geo');
 const { handlePhonenumber } = require('./routes-phonenumber');
+const { handleCellTower } = require('./routes-cell-tower');
 const { handleScenarios } = require('./routes-scenarios');
 const { handleSchedule } = require('./routes-schedule');
 const { handleBackup } = require('./routes-backup');
@@ -49,6 +50,7 @@ const handlers = [
     handleWeather,
     handleWifiGeo,
     handlePhonenumber,
+    handleCellTower,
     handleScenarios,
     handleSchedule,
     handleBackup,
