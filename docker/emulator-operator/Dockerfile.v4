@@ -1,0 +1,39 @@
+# op-v4: op-v3 + two changes, both additive to a clean op-v3 rollback target.
+#
+#  1. The property-driven RIL. libcuttlefish-ril-2.so is patched to spoof cell
+#     identity from persist.vendor.orchid.ril.{cid,lac,tac,mcc,mnc,mnclen,rat,
+#     neighbors}; with none of them set it behaves exactly like stock. It is
+#     baked into the vendor partition rather than pushed at runtime, because an
+#     `adb remount` + push lands in the AVD's scratch overlay and dies with the
+#     container. See bake-ril.py -- /vendor is a logical partition nested inside
+#     super inside system.img, which is why this is ext4 surgery and not a COPY.
+#
+#     Cost: rewriting system.img adds an ~8.6 GB layer (op-v3 12.3 GB -> ~21 GB),
+#     because docker copies the whole file on write. There is no cheaper place to
+#     put it: the guest mounts /vendor from super, and the sibling vendor.img is
+#     a decoy the guest never reads.
+#
+#  2. Removal of budtmo's /etc/passwd self-destruct, which otherwise makes every
+#     container a one-shot: it can start the emulator once, and never again after
+#     a restart or a host reboot. See disarm-kvm-passwd-mine.py.
+#
+# Nothing from op-v3 (netsim proxy) or op-v2 (op-shim / shlex fix / wifi / modem)
+# is touched. The op-shim still owns the operator identity (IMSI / EF_AD /
+# numeric_operator.xml); this image does not change it.
+FROM orchid-emulator:op-v3
+USER root
+
+# --- 1. bake the property-driven RIL into the vendor partition ---------------
+COPY libcuttlefish-ril-2.so /tmp/libcuttlefish-ril-2.so
+COPY bake-ril.py /tmp/bake-ril.py
+RUN python3 /tmp/bake-ril.py /tmp/libcuttlefish-ril-2.so && \
+    rm -f /tmp/bake-ril.py /tmp/libcuttlefish-ril-2.so
+
+# --- 2. disarm the /etc/passwd self-destruct ---------------------------------
+COPY disarm-kvm-passwd-mine.py /tmp/disarm-kvm-passwd-mine.py
+RUN python3 /tmp/disarm-kvm-passwd-mine.py && \
+    rm -f /tmp/disarm-kvm-passwd-mine.py && \
+    rm -rf /home/androidusr/docker-android/cli/src/device/__pycache__ && \
+    grep -q 'root:x:0:0:' /etc/passwd
+
+USER androidusr
