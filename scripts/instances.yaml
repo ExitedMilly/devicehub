@@ -100,9 +100,11 @@ instances:
     op_mcc: "250"
     op_mnc: "01"
     op_name: MTS
-    # op-v5 = op-v4 (baked RIL + passwd self-heal) + Redmi Note 12 build.prop mask.
+    # op-v6 = op-v5 + the orchid_ril_prop SELinux label, which is what lets the Cell-tower
+    # operblock write persist.vendor.orchid.ril.* from the plain shell (no adb root, so the
+    # screen stream survives). Required: cell-tower.js no longer takes root.
     # op-shim keeps the MTS operator identity; no wifi/phone/beacons configured here.
-    emulator_image: orchid-emulator:op-v5
+    emulator_image: orchid-emulator:op-v6
     cell_geo: true
 
   - name: test2
@@ -115,9 +117,11 @@ instances:
     vnc_port: 6082
     webrtc_udp_min: 40040
     webrtc_udp_max: 40050
-    # op-v5 = op-v4 (baked RIL + passwd self-heal) + Redmi Note 12 build.prop mask.
+    # op-v6 = op-v5 + the orchid_ril_prop SELinux label, which is what lets the Cell-tower
+    # operblock write persist.vendor.orchid.ril.* from the plain shell (no adb root, so the
+    # screen stream survives). Required: cell-tower.js no longer takes root.
     # Bare instance — no operator/wifi/phone/beacons.
-    emulator_image: orchid-emulator:op-v5
+    emulator_image: orchid-emulator:op-v6
     cell_geo: true
 
   - name: test3
@@ -133,9 +137,13 @@ instances:
     op_mcc: "250"
     op_mnc: "01"
     op_name: MTS
-    # op-v5 = op-v4 (baked property-driven RIL + /etc/passwd self-heal) + build.prop
-    # masking as a real Redmi Note 12 4G. Pilot for the fleet flip off op-v3.
-    emulator_image: orchid-emulator:op-v5
+    # op-v6 = op-v5 (baked RIL + /etc/passwd self-heal + Redmi Note 12 build.prop mask)
+    # + the orchid_ril_prop SELinux label. The label is what lets the Cell-tower operblock
+    # write persist.vendor.orchid.ril.* from the plain shell: before it, that needed
+    # `adb root`, and a root adbd stops minicap, so the operblock and the screen stream
+    # could not both work. Required now — cell-tower.js no longer takes root, so on op-v5
+    # the operblock would silently do nothing. Pilot for the fleet flip off op-v5.
+    emulator_image: orchid-emulator:op-v6
     # Mount opencellid-data/towers.db + CELL_GEO_DB into the manager so "Sync cell
     # towers with location" can look up real LTE towers (op-v5 RIL makes cells settable).
     cell_geo: true
