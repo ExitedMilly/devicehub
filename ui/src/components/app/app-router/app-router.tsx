@@ -5,6 +5,7 @@ import { DevicesPage } from '@/components/views/devices-page'
 import { ControlPage } from '@/components/views/control-page'
 import { MainLayout } from '@/components/layouts/main-layout'
 import { SettingsPage } from '@/components/views/settings-page'
+import { HelpPage } from '@/components/views/help-page'
 
 import {
   getMainRoute,
@@ -12,6 +13,7 @@ import {
   getControlRoute,
   getDevicesRoute,
   getSettingsRoute,
+  getHelpRoute,
 } from '@/constants/route-paths'
 
 import { ErrorBoundaryElement } from './error-boundary-element'
@@ -38,6 +40,9 @@ export const appRouter = createHashRouter(
               <Route element={<SettingsPage />} path='devices' />
               <Route element={<SettingsPage />} path='users' />
               <Route element={<SettingsPage />} path='shell' />
+            </Route>
+            <Route element={<HelpPage />} path={getHelpRoute()}>
+              <Route element={<HelpPage />} path='api' />
             </Route>
             <Route element={<GroupsPage />} path={getGroupsRoute()} />
             <Route element={<Navigate to={getDevicesRoute()} replace />} path='*' />

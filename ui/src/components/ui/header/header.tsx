@@ -15,18 +15,16 @@ import { DynamicLogo } from '@/components/lib/dynamic-logo'
 import { ConditionalRender } from '@/components/lib/conditional-render'
 
 import { useGetAuthUrl } from '@/lib/hooks/use-get-auth-url.hook'
-import { useGetAuthDocs } from '@/lib/hooks/use-get-auth-docs.hook'
 import { useGetAdditionalUrl } from '@/lib/hooks/use-get-additional-url.hook'
 import { authStore } from '@/store/auth-store'
 
-import { getAuthRoute, getDevicesRoute, getMainRoute, getSettingsRoute } from '@/constants/route-paths'
+import { getAuthRoute, getDevicesRoute, getHelpRoute, getMainRoute, getSettingsRoute } from '@/constants/route-paths'
 
 import styles from './header.module.css'
 
 export const Header = () => {
   const { t } = useTranslation()
   const { data: authUrl } = useGetAuthUrl()
-  const { data: authDocs } = useGetAuthDocs()
   const { data: additionalUrl } = useGetAdditionalUrl()
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false)
 
@@ -73,17 +71,11 @@ export const Header = () => {
       </div>
 
       <div className={styles.rightSide}>
-        <Button
-          before={<Icon16HelpOutline />}
-          Component='a'
-          disabled={!authDocs}
-          href={authDocs}
-          mode='tertiary'
-          size='m'
-          target='_blank'
-        >
-          {t('Help')}
-        </Button>
+        <Link className={styles.navLink} to={getHelpRoute()}>
+          <Button before={<Icon16HelpOutline />} mode='tertiary' size='m'>
+            {t('Help')}
+          </Button>
+        </Link>
         <Button
           before={<Icon16DoorEnterArrowRightOutline />}
           className={styles.logoutBtn}

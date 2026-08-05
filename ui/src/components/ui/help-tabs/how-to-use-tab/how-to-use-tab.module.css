@@ -1,0 +1,67 @@
+.root {
+  max-width: 900px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--vkui--color_text_primary);
+}
+
+.lead {
+  margin-bottom: 8px;
+}
+
+.intro {
+  margin: 0 0 8px;
+  color: var(--vkui--color_text_secondary);
+}
+
+.section {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--vkui--color_separator_primary);
+}
+
+.heading {
+  margin-bottom: 12px;
+}
+
+.subheading {
+  margin-top: 20px;
+  margin-bottom: 6px;
+}
+
+.section p {
+  margin: 0 0 12px;
+}
+
+.list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+
+.list li {
+  margin-bottom: 10px;
+}
+
+.warning {
+  padding: 10px 12px;
+  background: var(--vkui--color_background_negative_tint);
+  border-left: 3px solid var(--vkui--color_icon_negative);
+  border-radius: 4px;
+}
+
+.figure {
+  margin: 16px 0 20px;
+}
+
+.image {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--vkui--color_separator_primary);
+  border-radius: 8px;
+}
+
+.caption {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--vkui--color_text_secondary);
+}

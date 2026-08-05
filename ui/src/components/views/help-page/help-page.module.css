@@ -1,0 +1,5 @@
+.helpPage {
+  overflow-y: auto;
+  height: 100%;
+  background: var(--vkui--color_background_content);
+}
