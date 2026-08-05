@@ -1,9 +1,19 @@
 'use strict';
 
-// Runtime serving-cell / neighbour spoofing for the op-v4 emulator image, whose
-// baked libcuttlefish-ril-2.so reads cell identity from persist.vendor.orchid.ril.*
-// properties (unset => stock behaviour). We set them (via `adb root` — see setProp)
-// and then restart the RIL daemon so the framework re-acquires the serving cell.
+// Runtime serving-cell / neighbour spoofing. The baked libcuttlefish-ril-2.so (op-v4
+// and newer) reads cell identity from persist.vendor.orchid.ril.* properties (unset =>
+// stock behaviour). We set them from the plain shell and then restart the RIL daemon so
+// the framework re-acquires the serving cell.
+//
+// REQUIRES op-v6 OR NEWER. Those properties used to fall through to vendor_default_prop,
+// which platform policy lets only init/vendor_init set, so writing them needed `adb root`.
+// A root adbd stops minicap from starting at all, which killed the device screen stream —
+// this operblock and the screen could not be used at the same time. op-v6 gives the
+// namespace its own SELinux type (orchid_ril_prop) that the shell domain may set, so no
+// root is taken here any more and adbd stays in shell mode.
+//
+// On op-v5 and older there is no such label: setprop from the shell silently no-ops and
+// this module cannot work. Those instances need op-v6 (fleet migration is separate).
 //
 // WHY A DAEMON RESTART (not just re-registration): the RIL re-reads the props on
 // every registration query, but the framework CACHES ServiceState.mCellIdentity and
@@ -83,24 +93,10 @@ function validateNeighbors(neighbors) {
 
 // ----- Guest I/O helpers -----
 
-// Unlike the other operblocks (proxy/bluetooth/wifi use `su 0 cmd/settings`),
-// these are VENDOR properties, and SELinux (enforcing) has a hard
-// `neverallow { domain -init -vendor_init } vendor_default_prop:property_service set`
-// — so `su 0 setprop` silently no-ops. `adb root` puts adbd in the (permissive on
-// userdebug) su domain from which setprop DOES take effect. Idempotent: a second
-// call reports "already root" without restarting adbd. NOTE: this leaves the
-// instance's adbd running as root (the stock bench runs it as shell); the clean
-// alternative is a dedicated sepolicy label in a future image so `su 0 setprop`
-// works. See the operblock notes.
-async function ensureRoot(serial) {
-    const r = await runAdb(serial, ['root'], { allowFailure: true, timeoutMs: 15000 });
-    // The first flip restarts adbd; wait for the device to come back before use.
-    if (/restarting adbd as root/i.test(r.stdout || '')) {
-        await runAdb(serial, ['wait-for-device'], { timeoutMs: 20000 });
-    }
-    return r;
-}
-
+// No root, and deliberately no `su 0` either: on op-v6 these properties carry the
+// orchid_ril_prop type, which the shell domain is allowed to set outright (verified on a
+// live device under SELinux Enforcing). Keeping this on the plain shell is the whole
+// point — taking root would restart adbd as root and stop minicap, killing the screen.
 function setProp(serial, key, value) {
     // adb flattens argv to a shell string, which drops a trailing EMPTY arg — so
     // `setprop KEY ''` via separate argv errors "usage: setprop NAME VALUE" and
@@ -143,7 +139,14 @@ async function getSimOperator(serial) {
 // daemon, which forces a full re-acquire: rild re-runs RIL_Init, re-queries, and
 // the framework takes the fresh serving cell. ~6s, telephony survives the blip.
 // The service is `vendor.ril-daemon` (NOT `rild`; that name has no matching service
-// and its ctl.restart is rejected). Needs root, which ensureRoot() has already set.
+// and its ctl.restart is rejected).
+//
+// This one step DOES need elevation, but only `su 0`, never `adb root`. ctl.restart is a
+// ctl_* property, a separate family that the orchid_ril_prop label does not cover, and the
+// shell domain has no allow for it (verified: plain `setprop ctl.restart` fails with
+// "Failed to set property"). `su 0` runs the single command as root without touching
+// adbd's own mode, so minicap and the screen stream stay up — which `adb root` would not.
+//
 // NOTE: this refreshes the SERVING cell only; the neighbour list (getCellInfoList)
 // is cached harder by the framework and updates only on a full reboot.
 const RIL_SERVICE = 'vendor.ril-daemon';
@@ -154,7 +157,7 @@ function sleep(ms) {
 }
 
 async function restartRil(serial) {
-    await runAdb(serial, ['shell', `setprop ctl.restart ${RIL_SERVICE}`]);
+    await runAdb(serial, ['shell', `su 0 setprop ctl.restart ${RIL_SERVICE}`]);
     // Give init time to respawn the daemon and the radio to re-register.
     await sleep(RIL_RESTART_SETTLE_MS);
 }
@@ -229,8 +232,6 @@ async function applyCellTower(serial, body = {}) {
 
     log.info({ serial, cid, lac, tac, rat: ratKey, plmn: sim.plmn, neighbors: neighbors || '(none)' }, 'Applying cell tower');
 
-    await ensureRoot(serial);
-
     // Pin the numeric operator to the SIM. mnc is stored without a leading zero
     // (the RIL parses it as an int); mnclen carries the digit count so the RIL
     // re-pads it for the PLMN string. This keeps gsm.operator.numeric equal to
@@ -254,7 +255,6 @@ async function applyCellTower(serial, body = {}) {
 
 async function resetCellTower(serial) {
     log.info({ serial }, 'Resetting cell tower to stock');
-    await ensureRoot(serial);
     for (const k of OWNED_PROPS) {
         await setProp(serial, k, '');
     }

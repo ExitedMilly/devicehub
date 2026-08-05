@@ -1,0 +1,27 @@
+# op-v6: op-v5 + a dedicated SELinux type for the RIL spoof properties.
+#
+# Everything op-v5 carries is inherited unchanged (baked property-driven RIL, /etc/passwd
+# self-heal, Redmi Note 12 build.prop masking); this layer only edits the vendor sepolicy
+# so persist.vendor.orchid.ril.* gets its own type, orchid_ril_prop.
+#
+# The point is the screen. Those properties otherwise fall through to vendor_default_prop,
+# which platform policy lets only init/vendor_init set, so the Cell-tower operblock had to
+# run `adb root` — and under a root adbd minicap does not start at all, so the device screen
+# stream is dead for as long as the operblock is usable. With this type the shell domain may
+# set them directly (`su 0 setprop`), adbd stays in shell mode, and the two stop conflicting.
+#
+# The rule set was validated offline with secilc 3.5 before baking: it compiles both with
+# init's own flags (-m -M true -G -N -c 33) and with neverallow checking ENABLED. See the
+# header of bake-sepolicy.py for the two attribute memberships that are required to keep it
+# neverallow-clean, and why deleting precompiled_sepolicy is what makes the edit take effect.
+#
+# Cost: init now compiles the policy at boot with /system/bin/secilc instead of loading the
+# precompiled blob. Rollback is the untouched orchid-emulator:op-v5 tag.
+FROM orchid-emulator:op-v5
+USER root
+
+COPY bake-sepolicy.py /tmp/bake-sepolicy.py
+RUN python3 /tmp/bake-sepolicy.py && \
+    rm -f /tmp/bake-sepolicy.py
+
+USER androidusr
