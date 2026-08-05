@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OrchID manager API</title>
+  <link rel="stylesheet" href="./swagger-ui.css">
+  <style>
+    body { margin: 0; background: #fafafa; }
+    /* Reference only: the Authorize dialog exists to hold a token for outgoing requests,
+       and this page issues none. Hidden so it cannot imply otherwise. `.scheme-container`
+       is deliberately left alone — it also holds the servers dropdown, which is reference
+       material. The per-operation padlocks stay too: they mark which endpoints need a token. */
+    .swagger-ui .auth-wrapper { display: none; }
+    .swagger-ui .topbar { display: none; }
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="./swagger-ui-bundle.js"></script>
+  <script src="./swagger-ui-standalone-preset.js"></script>
+  <script>
+    window.onload = function () {
+      window.ui = SwaggerUIBundle({
+        // Generated at build time by ui/tools/generate-openapi.mjs from the JSDoc blocks in
+        // audio-infra/audio-capture-manager/http/routes-*.js — same source as before, it is
+        // only compiled here instead of on every manager port.
+        url: './openapi.json',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+        layout: 'BaseLayout',
+        // Empty list => no Try-it-out / Execute control for any HTTP method. This page
+        // documents the contract; to actually call the API take ./openapi.json and drive it
+        // from a real client (Postman, Insomnia, a generated client, curl).
+        supportedSubmitMethods: [],
+        docExpansion: 'none',
+        tagsSorter: 'alpha'
+      });
+    };
+  </script>
+</body>
+</html>

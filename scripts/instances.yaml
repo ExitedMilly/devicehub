@@ -84,15 +84,6 @@ defaults:
 #         tx_power: high
 #         interval: low-latency
 
-# Optional per-instance API docs gate. The manager serves a reference Swagger UI page at
-# /api/docs and the raw document at /api/openapi.json; both are ON by default, which is
-# what the bench wants. Set to false for a shipped deployment to take them down entirely —
-# with the gate off those paths answer exactly like a route that does not exist, so the
-# page cannot be discovered. Omit to keep them enabled. Example:
-#   - name: prod1
-#     ...
-#     docs_enabled: false
-
 instances:
   - name: test1
     # name → container names: emulator-{name}, audio-capture-mgr-{name}

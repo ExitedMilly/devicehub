@@ -96,11 +96,6 @@ const INITIAL_CELL = (CELL_CID && CELL_LAC && CELL_RAT)
 const STF_SECRET = process.env.STF_SECRET || null;
 const AUTH_REQUIRED = process.env.AUTH_REQUIRED === '1';
 
-// Swagger UI / OpenAPI docs gate. Enabled by default (bench); set DOCS_ENABLED=0 in a
-// shipped deployment. When off, /api/docs* is not registered at all, so it falls through
-// to the generic 404 — indistinguishable from a non-existent route.
-const DOCS_ENABLED = process.env.DOCS_ENABLED !== '0';
-
 // Ownership check config (P0.6 PR 3)
 const DEVICEHUB_API_HOST = process.env.DEVICEHUB_API_HOST || 'devicehub-api';
 const DEVICEHUB_API_PORT = parseInt(process.env.DEVICEHUB_API_PORT) || 3000;
@@ -125,7 +120,7 @@ module.exports = {
     WIFI_SSID, WIFI_PASSWORD, WIFI_MAC, PHONE_NUMBER,
     INITIAL_LAT, INITIAL_LON,
     INITIAL_CELL,
-    STF_SECRET, AUTH_REQUIRED, DOCS_ENABLED,
+    STF_SECRET, AUTH_REQUIRED,
     DEVICEHUB_API_HOST, DEVICEHUB_API_PORT,
     OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS,
     isSerialAllowed,

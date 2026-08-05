@@ -138,13 +138,6 @@ class Instance:
     # real LTE tower. op-v4 only (the RIL patch is what makes cells settable). The DB
     # is not committed; it must exist on the host at opencellid-data/towers.db.
     cell_geo: bool = False
-    # Serve the Swagger UI page and the raw OpenAPI document from the manager
-    # (/api/docs, /api/openapi.json). Defaults to True, which is what the bench wants;
-    # set to false for a shipped deployment to take the page down entirely — with it off
-    # those paths are indistinguishable from a route that does not exist. Only emitted
-    # into the container when false, so leaving it unset keeps the generated scripts
-    # byte-identical to what they were before this field existed.
-    docs_enabled: bool = True
 
 
 @dataclass

@@ -9,7 +9,14 @@
 //   - The per-path operations live as `@openapi` JSDoc blocks above the handlers in
 //     http/routes-*.js, and only ever $ref these components.
 //
-// swagger-jsdoc merges the two. See http/routes-docs.js for the serving side.
+// swagger-jsdoc merges the two.
+//
+// NOTE: the manager does not serve this document. It is compiled at frontend build time by
+// ui/tools/generate-openapi.mjs, which requires this file, scans the route annotations and
+// writes ui/public/api-docs/openapi.json into the UI's static assets. The page then lives
+// with the rest of the frontend (/api-docs/) instead of on each manager port, which is why
+// nothing here depends on express or swagger-ui-express any more. This file and the JSDoc
+// blocks above the handlers remain the single source of truth for the API contract.
 
 const path = require('path');
 const { MANAGER_PORT, INSTANCE_SERIAL } = require('../config');

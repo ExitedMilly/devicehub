@@ -18,7 +18,12 @@ RUN sed -i 's%./node_modules/.bin/tsx%node%g' ./bin/stf.mjs && \
 
 WORKDIR /app/ui
 
+# The OpenAPI document is compiled from the manager's JSDoc annotations
+# (audio-infra/audio-capture-manager/http/) into public/api-docs/ before the bundle is
+# built, so the shipped spec is always the one the code describes. It is a build step
+# rather than a committed file precisely so it cannot go stale.
 RUN npm ci && \
+    npm run generate-openapi && \
     npx tsc -b && \
     npx vite build
 

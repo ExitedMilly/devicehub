@@ -29,16 +29,12 @@ const { handleBackup } = require('./routes-backup');
 const { handleVideo } = require('./routes-video');
 const { handleFileInject } = require('./routes-file-inject');
 const { handleMetrics } = require('./routes-metrics');
-const { handleDocs } = require('./routes-docs');
 const { authMiddleware } = require('./auth-middleware');
 const { incrCounter } = require('../metrics');
 
 const handlers = [
     handleHealth,
     handleMetrics,
-    // Docs are matched early; no domain handler owns /api/docs or /api/openapi.json.
-    // Returns false when DOCS_ENABLED=0, so the request falls through to the 404 below.
-    handleDocs,
     handleCapture,
     handleGps,
     handleWalk,

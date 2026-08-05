@@ -29,3 +29,8 @@ tsconfig.node.tsbuildinfo
 
 .env.production
 .env.staging
+# Build artefacts from tools/generate-openapi.mjs (the page shell index.html stays tracked)
+public/api-docs/openapi.json
+public/api-docs/swagger-ui.css
+public/api-docs/swagger-ui-bundle.js
+public/api-docs/swagger-ui-standalone-preset.js

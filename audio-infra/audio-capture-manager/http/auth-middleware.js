@@ -1,7 +1,7 @@
 'use strict';
 
 const jws = require('jws');
-const { STF_SECRET, AUTH_REQUIRED, DOCS_ENABLED } = require('../config');
+const { STF_SECRET, AUTH_REQUIRED } = require('../config');
 const { checkOwnership, extractSerial } = require('./ownership');
 const log = require('../log').getLogger('http/auth');
 
@@ -10,17 +10,6 @@ const EXEMPT_PATHS = new Set([
     '/api/metrics',
 ]);
 
-// Swagger UI page, its static assets and the raw spec. Exempt only while DOCS_ENABLED=1
-// (with it off the paths 404 anyway). A browser cannot send an Authorization header on a
-// top-level navigation, so gating the page on Bearer would make it unopenable. The
-// operations it documents stay fully gated — Try-it-out without a token gets the same 401
-// as any other client. Disable the page entirely with DOCS_ENABLED=0 when shipping.
-function isDocsPath(pathname) {
-    if (!DOCS_ENABLED) return false;
-    return pathname === '/api/openapi.json'
-        || pathname === '/api/docs'
-        || pathname.startsWith('/api/docs/');
-}
 
 function extractToken(req) {
     const header = req.headers.authorization;
@@ -57,7 +46,7 @@ function verifyToken(token) {
 }
 
 async function authMiddleware(req, res, url) {
-    if (EXEMPT_PATHS.has(url.pathname) || isDocsPath(url.pathname)) {
+    if (EXEMPT_PATHS.has(url.pathname)) {
         req.user = null;
         return false;
     }
@@ -108,4 +97,4 @@ async function authMiddleware(req, res, url) {
     return true;
 }
 
-module.exports = { authMiddleware, verifyToken, EXEMPT_PATHS, isDocsPath };
+module.exports = { authMiddleware, verifyToken, EXEMPT_PATHS };
