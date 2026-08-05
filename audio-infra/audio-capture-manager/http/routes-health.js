@@ -17,6 +17,101 @@ function filterBySerial(obj) {
     return obj;
 }
 
+/**
+ * @openapi
+ * /health:
+ *   get:
+ *     tags: [system]
+ *     operationId: getHealth
+ *     summary: Liveness probe and process counters
+ *     description: |
+ *       Read-only. This is the container's healthcheck endpoint and the only JSON route that is
+ *       exempt from authentication, so it answers 200 with no token even when `AUTH_REQUIRED=1`.
+ *       The counters describe this manager process, not the emulator.
+ *     security: []
+ *     responses:
+ *       '200':
+ *         description: The manager is up.
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/HealthStatus' }
+ *             example:
+ *               status: ok
+ *               instances: 1
+ *               gpsSessions: 0
+ *               poseStates: 1
+ *               lightStates: 1
+ *               autoDiscovery: true
+ *               knownQemuInputs: 0
+ *
+ * /capture/status:
+ *   get:
+ *     tags: [system]
+ *     operationId: getCaptureStatus
+ *     summary: Audio-capture, microphone and camera state
+ *     description: |
+ *       Read-only snapshot of the media pipelines, keyed by serial. In SINGLE_MODE the maps are
+ *       filtered to this manager's own serial.
+ *
+ *       There is no serial in the path, so the per-device ownership check does not run for this
+ *       endpoint; the Bearer check still does.
+ *     responses:
+ *       '200':
+ *         description: Current pipeline state.
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/CaptureStatus' }
+ *       '401': { $ref: '#/components/responses/Unauthorized' }
+ *
+ * /gps/status:
+ *   get:
+ *     tags: [gps]
+ *     operationId: getGpsSessions
+ *     summary: Active mock-location keepalive sessions
+ *     description: |
+ *       Read-only. Lists the GPS keepalive sessions this manager is running, filtered to its own
+ *       serial in SINGLE_MODE. No serial in the path, so no ownership check.
+ *     responses:
+ *       '200':
+ *         description: Session snapshot.
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/GpsSessionsStatus' }
+ *       '401': { $ref: '#/components/responses/Unauthorized' }
+ *
+ * /pose/status:
+ *   get:
+ *     tags: [sensors]
+ *     operationId: getPoseStates
+ *     summary: Last applied device rotation per serial
+ *     description: |
+ *       Read-only. Reports the most recent single-shot rotation applied through this manager, not
+ *       a live sensor read. For continuous motion sessions see `/pose/scenario/status`.
+ *       No serial in the path, so no ownership check.
+ *     responses:
+ *       '200':
+ *         description: Pose snapshot.
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/PoseStatesStatus' }
+ *       '401': { $ref: '#/components/responses/Unauthorized' }
+ *
+ * /light/status:
+ *   get:
+ *     tags: [sensors]
+ *     operationId: getLightStates
+ *     summary: Last applied ambient-light value per serial
+ *     description: |
+ *       Read-only. Reports the most recent light value applied through this manager, including
+ *       which transport carried it. No serial in the path, so no ownership check.
+ *     responses:
+ *       '200':
+ *         description: Light snapshot.
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/LightStatesStatus' }
+ *       '401': { $ref: '#/components/responses/Unauthorized' }
+ */
 function handleHealth(req, res, url) {
     if (req.method === 'GET' && url.pathname === '/api/health') {
         res.writeHead(200);
