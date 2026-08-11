@@ -13,17 +13,61 @@ const { incrCounter } = require('../metrics');
 // In-memory positive cache: key = email:serial, value = { expiresAt }
 const cache = new Map();
 
+// Serial as it looks once the pathname has been decoded.
+const SERIAL_DECODED = /^\/(?:api\/[^/]+|[^/]+)\/([^/]+:[0-9]+)(?:\/.*)?$/;
+// The same shape matched against the still-encoded pathname. Needed because
+// decoding turns "%2F" into a path separator, which re-segments the path and
+// hides the serial from SERIAL_DECODED; here "%2F" stays an ordinary character.
+const SERIAL_ENCODED = /^\/(?:api\/[^/]+|[^/]+)\/([^/]+(?::|%3[Aa])[0-9]+)(?:\/.*)?$/;
+
+/**
+ * Percent-decode without throwing. A malformed escape ("%zz") makes
+ * decodeURIComponent raise URIError, and an exception here would take the
+ * ownership check out of the request path entirely — the opposite of what a
+ * security check should do when handed garbage. Fall back to the raw value so
+ * the caller still gets something to match, and let the route handler reject it.
+ */
+function safeDecode(value) {
+    try {
+        return decodeURIComponent(value);
+    } catch (err) {
+        return value;
+    }
+}
+
 /**
  * Extract serial from URL pathname like:
  *   /api/gps/emulator-test1:5555            → "emulator-test1:5555"
  *   /api/gps/emulator-test1:5555/stop       → "emulator-test1:5555"
  *   /audio/emulator-test1:5555              → "emulator-test1:5555"
  *   /api/backup/emulator-test1:5555/restore → "emulator-test1:5555"
+ *
+ * The pathname reaches us percent-encoded whenever the client encodes the
+ * serial — the frontend builds HTTP URLs with encodeURIComponent, so the colon
+ * arrives as "%3A", and nginx forwards the WebSocket routes with the request
+ * target untouched. Matching that against a literal colon found nothing, so
+ * this returned null, the caller read that as "no serial in this path" and
+ * skipped the ownership check altogether. Decode before matching.
+ *
  * Returns null if pattern doesn't match.
  */
 function extractSerial(pathname) {
-    const match = pathname.match(/^\/(?:api\/[^/]+|[^/]+)\/([^/]+:[0-9]+)(?:\/.*)?$/);
-    return match ? decodeURIComponent(match[1]) : null;
+    const decoded = safeDecode(pathname).match(SERIAL_DECODED);
+    if (decoded) {
+        return decoded[1];
+    }
+    const encoded = pathname.match(SERIAL_ENCODED);
+    return encoded ? safeDecode(encoded[1]) : null;
+}
+
+/**
+ * Behaviour of extractSerial before the decoding fix. Kept only so the
+ * transitional mode can tell a request that was already being checked from one
+ * the fix newly brings under the check — nothing else should use it.
+ */
+function extractSerialLegacy(pathname) {
+    const match = pathname.match(SERIAL_DECODED);
+    return match ? safeDecode(match[1]) : null;
 }
 
 function cacheGet(email, serial) {
@@ -105,4 +149,4 @@ function getCacheSize() {
     return cache.size;
 }
 
-module.exports = { checkOwnership, extractSerial, getCacheSize };
+module.exports = { checkOwnership, extractSerial, extractSerialLegacy, getCacheSize };

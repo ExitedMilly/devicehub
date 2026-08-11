@@ -2,8 +2,8 @@
 
 const { URL } = require('url');
 const { verifyToken } = require('../http/auth-middleware');
-const { checkOwnership, extractSerial } = require('../http/ownership');
-const { AUTH_REQUIRED } = require('../config');
+const { checkOwnership, extractSerial, extractSerialLegacy } = require('../http/ownership');
+const { AUTH_REQUIRED, OWNERSHIP_TRANSITIONAL } = require('../config');
 const log = require('../log').getLogger('ws/auth');
 
 function extractTokenFromSubprotocol(req) {
@@ -43,6 +43,16 @@ async function verifyWsAuth(req) {
     if (ownership === 'owns') {
         return { ok: true, user: result.user };
     }
+
+    // See the same branch in http/auth-middleware.js — measure before refusing.
+    if (OWNERSHIP_TRANSITIONAL && !extractSerialLegacy(url.pathname)) {
+        log.warn(
+            { path: req.url, email: result.user.email, serial, ownership },
+            'WS ownership would deny'
+        );
+        return { ok: true, user: result.user };
+    }
+
     if (ownership === 'not-owner') {
         log.warn({ path: req.url, email: result.user.email, serial }, 'WS ownership denied');
         return { ok: false, reason: 'forbidden', closeCode: 4003 };

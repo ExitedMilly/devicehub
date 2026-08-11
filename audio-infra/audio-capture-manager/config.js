@@ -101,6 +101,11 @@ const DEVICEHUB_API_HOST = process.env.DEVICEHUB_API_HOST || 'devicehub-api';
 const DEVICEHUB_API_PORT = parseInt(process.env.DEVICEHUB_API_PORT) || 3000;
 const OWNERSHIP_CACHE_TTL_MS = parseInt(process.env.OWNERSHIP_CACHE_TTL_MS) || 30000;
 const OWNERSHIP_REQUEST_TIMEOUT_MS = parseInt(process.env.OWNERSHIP_REQUEST_TIMEOUT_MS) || 3000;
+// Measurement aid for the extractSerial decoding fix: requests that the check
+// only started seeing because of that fix are logged and let through instead of
+// being refused, so the blast radius can be read off the logs before the refusal
+// is switched on. Off by default — the shipped behaviour is to enforce.
+const OWNERSHIP_TRANSITIONAL = process.env.OWNERSHIP_TRANSITIONAL === '1';
 
 function isSerialAllowed(serial) {
     if (!SINGLE_MODE) return true;
@@ -122,6 +127,6 @@ module.exports = {
     INITIAL_CELL,
     STF_SECRET, AUTH_REQUIRED,
     DEVICEHUB_API_HOST, DEVICEHUB_API_PORT,
-    OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS,
+    OWNERSHIP_CACHE_TTL_MS, OWNERSHIP_REQUEST_TIMEOUT_MS, OWNERSHIP_TRANSITIONAL,
     isSerialAllowed,
 };

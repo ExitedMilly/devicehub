@@ -1,8 +1,8 @@
 'use strict';
 
 const jws = require('jws');
-const { STF_SECRET, AUTH_REQUIRED } = require('../config');
-const { checkOwnership, extractSerial } = require('./ownership');
+const { STF_SECRET, AUTH_REQUIRED, OWNERSHIP_TRANSITIONAL } = require('../config');
+const { checkOwnership, extractSerial, extractSerialLegacy } = require('./ownership');
 const log = require('../log').getLogger('http/auth');
 
 const EXEMPT_PATHS = new Set([
@@ -80,6 +80,18 @@ async function authMiddleware(req, res, url) {
     const ownership = await checkOwnership(token, serial, req.user.email);
 
     if (ownership === 'owns') {
+        return false;
+    }
+
+    // Transitional mode: this request is only visible to the check because the
+    // decoding fix started matching encoded serials. Report what enforcement
+    // would have done and let it through, so the change can be measured against
+    // real traffic before it starts refusing anything.
+    if (OWNERSHIP_TRANSITIONAL && !extractSerialLegacy(url.pathname)) {
+        log.warn(
+            { url: req.url, email: req.user.email, serial, ownership },
+            'ownership would deny'
+        );
         return false;
     }
 
