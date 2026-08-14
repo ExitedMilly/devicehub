@@ -37,6 +37,7 @@ import { DeviceBackupStore } from '@/store/device-backup-store'
 import { DeviceConstructorStore } from '@/store/device-constructor-store'
 
 import { DeviceMediaDevicesStore } from '@/store/device-media-devices-store'
+import { deviceBookingGate } from '@/store/device-booking-gate'
 
 /* NOTE:
   Creating a container for a specific device, isolating its dependencies, and ensuring that the
@@ -52,6 +53,14 @@ export const createDeviceContainer = (serial: string): Container => {
     container (in our case, globalContainer)
   */
   const deviceContainer = new Container({ defaultScope: 'Singleton' })
+
+  /* NOTE:
+    Arm the booking barrier here, not in DeviceLifecycleService. This runs while the control page
+    renders, before any store below can be resolved — including DeviceConstructorStore, which
+    fetches from its own constructor. Arming any later would leave exactly the gap the barrier
+    exists to close. DeviceLifecycleService then hands it the booking promise.
+  */
+  deviceBookingGate.arm(serial)
 
   deviceContainer.bind<string>(CONTAINER_IDS.deviceSerial).toConstantValue(serial)
 
