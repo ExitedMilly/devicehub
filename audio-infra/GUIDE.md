@@ -160,9 +160,9 @@ docker exec emulator-1 env | grep PULSE
 
 ```bash
 # Запустить FFmpeg capture
-curl -X POST http://localhost:7600/api/capture/start \
+curl -X POST http://localhost:7600/api/capture/emulator-1:5555/start \
     -H "Content-Type: application/json" \
-    -d '{"serial": "emulator-1:5555", "sinkIndex": 1}'
+    -d '{"sinkIndex": 1}'
 
 # Ответ:
 # {

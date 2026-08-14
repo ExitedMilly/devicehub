@@ -3,6 +3,7 @@
 const { URL } = require('url');
 const { verifyToken } = require('../http/auth-middleware');
 const { checkOwnership, extractSerial, extractSerialLegacy } = require('../http/ownership');
+const { isDecodablePath } = require('../http/helpers');
 const { AUTH_REQUIRED, OWNERSHIP_TRANSITIONAL } = require('../config');
 const log = require('../log').getLogger('ws/auth');
 
@@ -16,6 +17,14 @@ function extractTokenFromSubprotocol(req) {
 }
 
 async function verifyWsAuth(req) {
+    // Same gate as the HTTP middleware, and for the same reason: the WS route
+    // handlers decode the captured serial too. 4000 is the code ws/server.js
+    // already uses for a path it cannot serve.
+    if (!isDecodablePath(new URL(req.url, 'http://localhost').pathname)) {
+        log.warn({ path: req.url }, 'WS malformed percent-encoding in path');
+        return { ok: false, reason: 'malformed path', closeCode: 4000 };
+    }
+
     const token = extractTokenFromSubprotocol(req);
     const result = verifyToken(token);
 

@@ -8,7 +8,7 @@ const log = require('../log').getLogger('http/routes-capture');
 
 /**
  * @openapi
- * /capture/start:
+ * /capture/{serial}/start:
  *   post:
  *     tags: [system]
  *     operationId: startCapture
@@ -22,18 +22,17 @@ const log = require('../log').getLogger('http/routes-capture');
  *       If a pipeline is already running for the serial the call is a no-op and reports
  *       `already_running`.
  *
- *       **Known discrepancy — read before relying on this in a shared deployment.** The serial is
- *       taken from the request *body*, not from the path. The ownership middleware only extracts a
- *       serial from the URL, so this route is covered by the Bearer check but **not** by the
- *       per-device ownership check that serial-in-path routes get. In SINGLE_MODE the
- *       `isSerialAllowed` guard still restricts it to this manager's own emulator, which is what
- *       limits the blast radius today. Tracked separately; not changed as part of documenting it.
+ *       Note that `/audio/{serial}` refuses to attach when no pipeline exists for the serial
+ *       (close code 4004), so a stopped capture stays stopped until something starts it again —
+ *       this endpoint, or a manager restart.
+ *     parameters:
+ *       - $ref: '#/components/parameters/Serial'
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema: { $ref: '#/components/schemas/CaptureStartRequest' }
- *           example: { serial: 'emulator-test3:5555', sinkIndex: 4 }
+ *           example: { sinkIndex: 4 }
  *     responses:
  *       '200':
  *         description: Pipeline started, or already running.
@@ -46,32 +45,26 @@ const log = require('../log').getLogger('http/routes-capture');
  *               alreadyRunning:
  *                 value: { status: already_running, serial: 'emulator-test3:5555', sinkName: emu_audio_4, state: running, clients: 1 }
  *       '400':
- *         description: '`serial` or `sinkIndex` missing, or the body is not valid JSON.'
+ *         description: '`sinkIndex` missing, or the body is not valid JSON.'
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorWithReason' }
- *             example: { error: 'serial and sinkIndex required' }
+ *             example: { error: 'sinkIndex required' }
  *       '401': { $ref: '#/components/responses/Unauthorized' }
- *       '403': { $ref: '#/components/responses/ForbiddenSingleMode' }
+ *       '403': { $ref: '#/components/responses/Forbidden' }
+ *       '503': { $ref: '#/components/responses/OwnershipUnavailable' }
  *
- * /capture/stop:
+ * /capture/{serial}/stop:
  *   post:
  *     tags: [system]
  *     operationId: stopCapture
  *     summary: Stop the audio-capture pipeline for a serial
  *     description: |
  *       **Live device.** Terminates the FFmpeg process and closes every WebSocket client attached
- *       to that audio stream.
- *
- *       **Same known discrepancy as `/capture/start`:** the serial arrives in the body, so the
- *       per-device ownership check does not run for this route (the Bearer check and, in
- *       SINGLE_MODE, the `isSerialAllowed` guard still do). Documented as-is; not changed here.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema: { $ref: '#/components/schemas/CaptureStopRequest' }
- *           example: { serial: 'emulator-test3:5555' }
+ *       to that audio stream. The pipeline does not come back on its own: `/audio/{serial}` will
+ *       refuse new listeners with close code 4004 until capture is started again.
+ *     parameters:
+ *       - $ref: '#/components/parameters/Serial'
  *     responses:
  *       '200':
  *         description: Pipeline stopped.
@@ -79,25 +72,28 @@ const log = require('../log').getLogger('http/routes-capture');
  *           application/json:
  *             schema: { $ref: '#/components/schemas/CaptureActionResult' }
  *             example: { status: stopped, serial: 'emulator-test3:5555' }
- *       '400':
- *         description: '`serial` missing, or the body is not valid JSON.'
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorWithReason' }
- *             example: { error: 'serial required' }
  *       '401': { $ref: '#/components/responses/Unauthorized' }
- *       '403': { $ref: '#/components/responses/ForbiddenSingleMode' }
+ *       '403': { $ref: '#/components/responses/Forbidden' }
  *       '404':
  *         description: No capture pipeline is running for that serial.
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorWithReason' }
  *             example: { error: 'not found' }
+ *       '503': { $ref: '#/components/responses/OwnershipUnavailable' }
  */
+// The serial lives in the path, like every other per-device route here. It used to
+// arrive in the body, and that put these two endpoints outside the ownership check
+// entirely: the middleware reads the serial from the URL, found none, and let the
+// request through — a non-owner could stop the audio capture on someone else's
+// booked device. Keeping the serial in the path is what makes the middleware cover
+// them, so it stays there.
 function handleCapture(req, res, url) {
-    if (req.method === 'POST' && url.pathname === '/api/capture/start') {
-        readJsonBody(req).then(({ serial, sinkIndex }) => {
-            if (!serial || !sinkIndex) { res.writeHead(400); res.end(JSON.stringify({ error: 'serial and sinkIndex required' })); return; }
+    const startMatch = url.pathname.match(/^\/api\/capture\/(.+)\/start$/);
+    if (req.method === 'POST' && startMatch) {
+        const serial = decodeURIComponent(startMatch[1]);
+        readJsonBody(req).then(({ sinkIndex }) => {
+            if (!sinkIndex) { res.writeHead(400); res.end(JSON.stringify({ error: 'sinkIndex required' })); return; }
             if (!isSerialAllowed(serial)) {
                 log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
                 res.writeHead(403);
@@ -122,22 +118,21 @@ function handleCapture(req, res, url) {
         return true;
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/capture/stop') {
-        readJsonBody(req).then(({ serial }) => {
-            if (!serial) { res.writeHead(400); res.end(JSON.stringify({ error: 'serial required' })); return; }
-            if (!isSerialAllowed(serial)) {
-                log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
-                res.writeHead(403);
-                res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
-                return;
-            }
-            const instance = instances.get(serial);
-            if (!instance) { res.writeHead(404); res.end(JSON.stringify({ error: 'not found' })); return; }
-            instance.stop();
-            instances.delete(serial);
-            res.writeHead(200);
-            res.end(JSON.stringify({ status: 'stopped', serial }));
-        }).catch((err) => { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); });
+    const stopMatch = url.pathname.match(/^\/api\/capture\/(.+)\/stop$/);
+    if (req.method === 'POST' && stopMatch) {
+        const serial = decodeURIComponent(stopMatch[1]);
+        if (!isSerialAllowed(serial)) {
+            log.info({ serial, instanceSerial: INSTANCE_SERIAL, endpoint: req.url }, 'Serial not allowed in single mode');
+            res.writeHead(403);
+            res.end(JSON.stringify({ error: 'Serial not allowed in single mode', expected: INSTANCE_SERIAL }));
+            return true;
+        }
+        const instance = instances.get(serial);
+        if (!instance) { res.writeHead(404); res.end(JSON.stringify({ error: 'not found' })); return true; }
+        instance.stop();
+        instances.delete(serial);
+        res.writeHead(200);
+        res.end(JSON.stringify({ status: 'stopped', serial }));
         return true;
     }
 

@@ -160,3 +160,23 @@ function shutdown(signal) {
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Deliberately keep Node's fail-fast policy and only make the death legible.
+// Swallowing these and carrying on would leave the manager holding state it can
+// no longer reason about — a half-started capture instance, a keepalive timer
+// pointing at a dead adb session — and every one of those is rebuilt from
+// scratch on boot anyway, with the container restarted by Docker. What was
+// missing is the record: an uncaught error went to stderr as a bare stack,
+// outside the structured log, so a restart looked like it came from nowhere.
+// No graceful shutdown() here on purpose: after an uncaught error its cleanup
+// path is exactly as untrustworthy as everything else.
+function dieOn(kind, err) {
+    log.error({
+        kind,
+        err: err && err.message,
+        stack: err && err.stack,
+    }, 'fatal: unhandled error, exiting');
+    process.exit(1);
+}
+process.on('uncaughtException', (err) => dieOn('uncaughtException', err));
+process.on('unhandledRejection', (err) => dieOn('unhandledRejection', err));

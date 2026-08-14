@@ -129,7 +129,7 @@ Node.js сервис на порту 7600:
 - **PA Monitor**: каждые 3 секунды опрашивает PulseAudio, обнаруживает QEMU подключения, автоматически направляет и запускает capture
 - **FFmpeg**: кодирует PCM → Opus в WebM контейнере
 - **WebSocket**: раздаёт WebM/Opus поток, буферизирует init segment для новых клиентов
-- **HTTP API**: `/api/health`, `/api/capture/status`, `/api/capture/start`, `/api/capture/stop`
+- **HTTP API**: `/api/health`, `/api/capture/status`, `/api/capture/<serial>/start`, `/api/capture/<serial>/stop`
 - **Auto-restart**: при DTS ошибках (после sleep/suspend) автоматически перезапускает FFmpeg
 
 ### nginx
@@ -150,14 +150,12 @@ curl http://localhost:7600/api/health
 curl http://localhost:7600/api/capture/status
 
 # Ручной запуск (обычно не нужен — auto-discovery делает это)
-curl -X POST http://localhost:7600/api/capture/start \
+curl -X POST http://localhost:7600/api/capture/emulator-1:5555/start \
     -H "Content-Type: application/json" \
-    -d '{"serial": "emulator-1:5555", "sinkIndex": 1}'
+    -d '{"sinkIndex": 1}'
 
 # Ручная остановка
-curl -X POST http://localhost:7600/api/capture/stop \
-    -H "Content-Type: application/json" \
-    -d '{"serial": "emulator-1:5555"}'
+curl -X POST http://localhost:7600/api/capture/emulator-1:5555/stop
 ```
 
 ## Troubleshooting

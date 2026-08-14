@@ -165,9 +165,9 @@ step "8: Start audio capture for emulator"
 EMU_SERIAL="emulator-1:5555"
 
 echo "Starting capture for $EMU_SERIAL on sink index 1..."
-CAPTURE_RESULT=$(curl -sf -X POST http://localhost:7600/api/capture/start \
+CAPTURE_RESULT=$(curl -sf -X POST "http://localhost:7600/api/capture/$EMU_SERIAL/start" \
     -H "Content-Type: application/json" \
-    -d "{\"serial\": \"$EMU_SERIAL\", \"sinkIndex\": 1}" 2>&1) || true
+    -d '{"sinkIndex": 1}' 2>&1) || true
 
 echo "$CAPTURE_RESULT" | python3 -m json.tool 2>/dev/null || echo "$CAPTURE_RESULT"
 

@@ -3,6 +3,7 @@
 const jws = require('jws');
 const { STF_SECRET, AUTH_REQUIRED, OWNERSHIP_TRANSITIONAL } = require('../config');
 const { checkOwnership, extractSerial, extractSerialLegacy } = require('./ownership');
+const { isDecodablePath } = require('./helpers');
 const log = require('../log').getLogger('http/auth');
 
 const EXEMPT_PATHS = new Set([
@@ -46,6 +47,20 @@ function verifyToken(token) {
 }
 
 async function authMiddleware(req, res, url) {
+    // Before anything else, and deliberately not behind AUTH_REQUIRED: a path
+    // the route handlers cannot decode must never reach them, because their
+    // decodeURIComponent would throw and kill the process rather than the
+    // request. See isDecodablePath for why checking the whole path suffices.
+    if (!isDecodablePath(url.pathname)) {
+        log.warn({ url: req.url }, 'malformed percent-encoding in path');
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            error: 'bad request',
+            reason: 'malformed percent-encoding in path',
+        }));
+        return true;
+    }
+
     if (EXEMPT_PATHS.has(url.pathname)) {
         req.user = null;
         return false;

@@ -1,0 +1,12 @@
+{
+  "name": "orchid-ui-tools",
+  "private": true,
+  "type": "module",
+  "description": "Standalone tooling that is NOT part of the frontend bundle or its Docker build. Kept in its own package so `npm ci` in ui/ never pulls Playwright and its browsers into the image.",
+  "scripts": {
+    "capture": "node capture-test-guide.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

@@ -156,15 +156,9 @@ const schemas = {
     CaptureStartRequest: {
         type: 'object',
         properties: {
-            serial: { type: 'string', example: SERIAL_EXAMPLE },
             sinkIndex: { type: 'integer', description: 'PulseAudio sink index (emu_audio_<N>).', example: 4 },
         },
-        required: ['serial', 'sinkIndex'],
-    },
-    CaptureStopRequest: {
-        type: 'object',
-        properties: { serial: { type: 'string', example: SERIAL_EXAMPLE } },
-        required: ['serial'],
+        required: ['sinkIndex'],
     },
     CaptureActionResult: {
         type: 'object',
@@ -1039,13 +1033,11 @@ const definition = {
                 description:
                     'Emulator serial, `host:port`. In SINGLE_MODE it must equal this manager\'s ' +
                     'INSTANCE_SERIAL, otherwise the call is rejected with 403. The colon may be sent ' +
-                    'raw or percent-encoded (`%3A`); both reach the handler, including through nginx.\n\n' +
-                    'Known discrepancy: the two encodings are not equivalent for the ownership check. ' +
-                    '`http/ownership.js:extractSerial` matches the still-encoded pathname with a ' +
-                    'pattern that requires a literal colon, so a percent-encoded serial yields no ' +
-                    'match and the request is treated as having no serial — which skips the ' +
-                    'per-device ownership check (the Bearer check and the SINGLE_MODE guard still ' +
-                    'apply). Raw-colon requests are checked normally. Reported, not changed here.',
+                    'raw or percent-encoded (`%3A`); both reach the handler, including through nginx, ' +
+                    'and both are subject to the same per-device ownership check — the two encodings ' +
+                    'are equivalent for every check the manager applies.\n\n' +
+                    'A serial whose percent-encoding cannot be decoded (`%zz`, a lone `%`) is ' +
+                    'rejected with 400 before any handler runs.',
                 schema: { type: 'string', pattern: '^[^/]+:[0-9]+$' },
                 example: SERIAL_EXAMPLE,
             },

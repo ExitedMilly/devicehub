@@ -9,6 +9,7 @@ const {
 } = require('../config');
 const log = require('../log').getLogger('ownership');
 const { incrCounter } = require('../metrics');
+const { safeDecode } = require('./helpers');
 
 // In-memory positive cache: key = email:serial, value = { expiresAt }
 const cache = new Map();
@@ -19,21 +20,6 @@ const SERIAL_DECODED = /^\/(?:api\/[^/]+|[^/]+)\/([^/]+:[0-9]+)(?:\/.*)?$/;
 // decoding turns "%2F" into a path separator, which re-segments the path and
 // hides the serial from SERIAL_DECODED; here "%2F" stays an ordinary character.
 const SERIAL_ENCODED = /^\/(?:api\/[^/]+|[^/]+)\/([^/]+(?::|%3[Aa])[0-9]+)(?:\/.*)?$/;
-
-/**
- * Percent-decode without throwing. A malformed escape ("%zz") makes
- * decodeURIComponent raise URIError, and an exception here would take the
- * ownership check out of the request path entirely — the opposite of what a
- * security check should do when handed garbage. Fall back to the raw value so
- * the caller still gets something to match, and let the route handler reject it.
- */
-function safeDecode(value) {
-    try {
-        return decodeURIComponent(value);
-    } catch (err) {
-        return value;
-    }
-}
 
 /**
  * Extract serial from URL pathname like:
